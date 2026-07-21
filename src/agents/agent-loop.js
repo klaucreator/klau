@@ -35,7 +35,7 @@ function sleep(ms) {
 // Network hiccups and provider-side overload are worth a couple of automatic
 // retries; anything else (bad API key, malformed request, model refusing) is not.
 function isRetryableAgentError(err) {
-  if (err && [429, 500, 502, 503, 504, 529].includes(err.status)) return true;
+  if (err && [500, 502, 503, 504, 529].includes(err.status)) return true;
   const msg = (err && err.message || '').toLowerCase();
   return (
     msg.includes('network') ||

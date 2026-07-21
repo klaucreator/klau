@@ -650,7 +650,7 @@ var require_agent_loop = __commonJS({
       return new Promise((resolve) => setTimeout(resolve, ms));
     }
     function isRetryableAgentError(err) {
-      if (err && [429, 500, 502, 503, 504, 529].includes(err.status)) return true;
+      if (err && [500, 502, 503, 504, 529].includes(err.status)) return true;
       const msg = (err && err.message || "").toLowerCase();
       return msg.includes("network") || msg.includes("fetch failed") || msg.includes("econnreset") || msg.includes("timeout") || msg.includes("overloaded");
     }
