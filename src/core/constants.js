@@ -14,7 +14,7 @@ const DEFAULT_SETTINGS = {
       apiKey: '',
       baseUrl: 'https://api.anthropic.com',
       model: 'claude-sonnet-4-6',
-      maxTokens: 8192,
+      maxTokens: -1,
       timeoutMs: 120000,
     },
     {
@@ -24,7 +24,7 @@ const DEFAULT_SETTINGS = {
       apiKey: '',
       baseUrl: 'https://api.openai.com/v1',
       model: 'gpt-4o',
-      maxTokens: 8192,
+      maxTokens: -1,
       timeoutMs: 120000,
     },
   ],

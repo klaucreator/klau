@@ -25,7 +25,7 @@ var require_constants = __commonJS({
           apiKey: "",
           baseUrl: "https://api.anthropic.com",
           model: "claude-sonnet-4-6",
-          maxTokens: 8192,
+          maxTokens: -1,
           timeoutMs: 12e4
         },
         {
@@ -35,7 +35,7 @@ var require_constants = __commonJS({
           apiKey: "",
           baseUrl: "https://api.openai.com/v1",
           model: "gpt-4o",
-          maxTokens: 8192,
+          maxTokens: -1,
           timeoutMs: 12e4
         }
       ],
@@ -43,7 +43,7 @@ var require_constants = __commonJS({
       systemPrompt: "",
       includeActiveNote: false,
       organizeMaxFiles: 150,
-      agentMaxSteps: 20,
+      agentMaxSteps: -1,
       agentAutoApprove: false,
       agentTeam: [],
       villageState: null
@@ -113,7 +113,7 @@ var require_anthropic = __commonJS({
       }
     }
     async function sendToAnthropic(messages, provider, systemText) {
-      const maxTokens = provider.maxTokens || 8192;
+      const maxTokens = provider.maxTokens || -1;
       const body = {
         model: provider.model,
         max_tokens: maxTokens,
@@ -148,7 +148,7 @@ var require_anthropic = __commonJS({
         throw err;
       }
       const parsed = safeJson(res);
-      if (parsed.stop_reason === "max_tokens") {
+      if (maxTokens > 0 && parsed.stop_reason === "max_tokens") {
         throw new Error(
           `Response was cut off after hitting the ${maxTokens}-token limit before finishing. Try a smaller/simpler step, or ask the agent to keep its final summary shorter.`
         );
@@ -157,10 +157,9 @@ var require_anthropic = __commonJS({
       return content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
     }
     async function streamAnthropic(messages, provider, systemText, onDelta, signal) {
-      const maxTokens = provider.maxTokens || 8192;
+      const maxTokens = provider.maxTokens || -1;
       const body = {
         model: provider.model,
-        max_tokens: maxTokens,
         stream: true,
         messages: messages.map((m) => ({
           role: m.role === "assistant" ? "assistant" : "user",
@@ -168,6 +167,7 @@ var require_anthropic = __commonJS({
         }))
       };
       if (systemText) body.system = systemText;
+      if (maxTokens > 0) body.max_tokens = maxTokens;
       const timeout = provider.timeoutMs || 12e4;
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeout);
@@ -205,7 +205,7 @@ var require_anthropic = __commonJS({
         }
         return full;
       }, onDelta);
-      if (truncated) {
+      if (truncated && maxTokens > 0) {
         throw new Error(
           `Response was cut off after hitting the ${maxTokens}-token limit before finishing. Try a smaller/simpler step, or ask the agent to keep its final summary shorter.`
         );
@@ -241,12 +241,12 @@ var require_openai_compatible = __commonJS({
       }
     }
     async function sendToOpenAICompatible(messages, provider, systemText) {
-      const maxTokens = provider.maxTokens || 8192;
+      const maxTokens = provider.maxTokens || -1;
       const body = {
         model: provider.model,
-        max_tokens: maxTokens,
         messages: systemText ? [{ role: "system", content: systemText }, ...messages] : messages
       };
+      if (maxTokens > 0) body.max_tokens = maxTokens;
       const res = await requestUrl({
         url: `${provider.baseUrl.replace(/\/$/, "")}/chat/completions`,
         method: "POST",
@@ -269,7 +269,7 @@ var require_openai_compatible = __commonJS({
         throw err;
       }
       const parsed = safeJson(res);
-      if (parsed.choices?.[0]?.finish_reason === "length") {
+      if (maxTokens > 0 && parsed.choices?.[0]?.finish_reason === "length") {
         throw new Error(
           `Response was cut off after hitting the ${maxTokens}-token limit before finishing. Try a smaller/simpler step, or ask the agent to keep its final summary shorter.`
         );
@@ -277,13 +277,13 @@ var require_openai_compatible = __commonJS({
       return parsed.choices?.[0]?.message?.content || "";
     }
     async function streamOpenAICompatible(messages, provider, systemText, onDelta, signal) {
-      const maxTokens = provider.maxTokens || 8192;
+      const maxTokens = provider.maxTokens || -1;
       const body = {
         model: provider.model,
-        max_tokens: maxTokens,
         stream: true,
         messages: systemText ? [{ role: "system", content: systemText }, ...messages] : messages
       };
+      if (maxTokens > 0) body.max_tokens = maxTokens;
       const timeout = provider.timeoutMs || 12e4;
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeout);
@@ -311,11 +311,11 @@ var require_openai_compatible = __commonJS({
       }
       let truncated = false;
       const text = await readSse(res.body, (evt, full) => {
-        if (evt.choices?.[0]?.finish_reason === "length") truncated = true;
+        if (maxTokens > 0 && evt.choices?.[0]?.finish_reason === "length") truncated = true;
         const delta = evt.choices?.[0]?.delta?.content;
         return delta ? full + delta : full;
       }, onDelta);
-      if (truncated) {
+      if (maxTokens > 0 && truncated) {
         throw new Error(
           `Response was cut off after hitting the ${maxTokens}-token limit before finishing. Try a smaller/simpler step, or ask the agent to keep its final summary shorter.`
         );
@@ -4118,8 +4118,8 @@ var require_settings_tab = __commonJS({
             await this.plugin.saveSettings();
           });
         });
-        new Setting(box).setName("Max output tokens").setDesc("Maximum tokens per response. Default: 8192.").addText((text) => {
-          text.setValue(String(provider.maxTokens || 8192));
+        new Setting(box).setName("Max output tokens").setDesc("Maximum tokens per response. Default: -1 (unlimited).").addText((text) => {
+          text.setValue(String(provider.maxTokens || -1));
           text.onChange(async (value) => {
             const n = parseInt(value, 10);
             if (!isNaN(n) && n > 0) {

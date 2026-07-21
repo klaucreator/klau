@@ -307,7 +307,7 @@ class AgentView extends ItemView {
 
   async runStage(goalText, roleText, label, villageKey) {
     const transcript = [{ role: 'user', content: goalText }];
-    const maxSteps = this.plugin.settings.agentMaxSteps || 20;
+    const maxSteps = this.plugin.settings.agentMaxSteps || -1;
     let steps = 0;
     const prefix = label ? `[${label}] ` : '';
     const village = this.plugin.village;
@@ -316,7 +316,7 @@ class AgentView extends ItemView {
     village.setBubble(vkey, '💭', 'Getting started...', 0);
     village.setStatus(vkey, 'working', { taskText: 'Getting started...', subStatus: 'thinking' });
 
-    while (this.running && steps < maxSteps) {
+    while (this.running && (maxSteps <= 0 || steps < maxSteps)) {
       steps++;
       this.setStepCounter(`Step ${steps} / ${maxSteps}${label ? ` — ${label}` : ''}`);
 
@@ -433,7 +433,7 @@ class AgentView extends ItemView {
       transcript.push({ role: 'user', content: `Tool result:\n${resultText}` });
     }
 
-    if (steps >= maxSteps && this.running) {
+    if (maxSteps > 0 && steps >= maxSteps && this.running) {
       this.logStep('error', `${prefix}Reached the maximum step limit (change it in settings if needed).`);
       village.setStatus(vkey, 'error', { taskText: 'Ran out of steps' });
     } else if (!this.running) {

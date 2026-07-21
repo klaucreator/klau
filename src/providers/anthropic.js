@@ -21,15 +21,15 @@ function safeJson(res) {
 }
 
 async function sendToAnthropic(messages, provider, systemText) {
-  const maxTokens = provider.maxTokens || 8192;
+  const maxTokens = provider.maxTokens || -1;
   const body = {
     model: provider.model,
-    max_tokens: maxTokens,
     messages: messages.map((m) => ({
       role: m.role === 'assistant' ? 'assistant' : 'user',
       content: m.content,
     })),
   };
+  if (maxTokens > 0) body.max_tokens = maxTokens;
   if (systemText) body.system = systemText;
 
   const res = await requestUrl({
@@ -61,7 +61,7 @@ async function sendToAnthropic(messages, provider, systemText) {
   }
 
   const parsed = safeJson(res);
-  if (parsed.stop_reason === 'max_tokens') {
+  if (maxTokens > 0 && parsed.stop_reason === 'max_tokens') {
     throw new Error(
       `Response was cut off after hitting the ${maxTokens}-token limit before finishing. ` +
       `Try a smaller/simpler step, or ask the agent to keep its final summary shorter.`
@@ -80,10 +80,9 @@ async function sendToAnthropic(messages, provider, systemText) {
 // stream reading itself fails (rather than the API returning an error), the caller falls back
 // to the non-streaming request so the agent still works in environments where this doesn't apply.
 async function streamAnthropic(messages, provider, systemText, onDelta, signal) {
-  const maxTokens = provider.maxTokens || 8192;
+  const maxTokens = provider.maxTokens || -1;
   const body = {
     model: provider.model,
-    max_tokens: maxTokens,
     stream: true,
     messages: messages.map((m) => ({
       role: m.role === 'assistant' ? 'assistant' : 'user',
@@ -91,6 +90,7 @@ async function streamAnthropic(messages, provider, systemText, onDelta, signal) 
     })),
   };
   if (systemText) body.system = systemText;
+  if (maxTokens > 0) body.max_tokens = maxTokens;
 
   const timeout = provider.timeoutMs || 120000;
   const controller = new AbortController();
@@ -134,7 +134,7 @@ async function streamAnthropic(messages, provider, systemText, onDelta, signal) 
     return full;
   }, onDelta);
 
-  if (truncated) {
+  if (truncated && maxTokens > 0) {
     throw new Error(
       `Response was cut off after hitting the ${maxTokens}-token limit before finishing. ` +
       `Try a smaller/simpler step, or ask the agent to keep its final summary shorter.`

@@ -100,12 +100,12 @@ class AIChatSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Max steps per run')
-      .setDesc('Safety limit on how many tool calls the agent can make for one goal.')
+      .setDesc('Safety limit on how many tool calls the agent can make for one goal. Set to -1 for unlimited.')
       .addText((text) => {
         text.setValue(String(this.plugin.settings.agentMaxSteps));
         text.onChange(async (value) => {
           const n = parseInt(value, 10);
-          if (!isNaN(n) && n > 0) {
+          if (!isNaN(n) && n >= -1) {
             this.plugin.settings.agentMaxSteps = n;
             await this.plugin.saveSettings();
           }
@@ -303,12 +303,12 @@ class AIChatSettingTab extends PluginSettingTab {
 
     new Setting(box)
       .setName('Max output tokens')
-      .setDesc('Maximum tokens per response. Default: 8192.')
+      .setDesc('Maximum tokens per response. Set to -1 for unlimited. Default: -1.')
       .addText((text) => {
-        text.setValue(String(provider.maxTokens || 8192));
+        text.setValue(String(provider.maxTokens || -1));
         text.onChange(async (value) => {
           const n = parseInt(value, 10);
-          if (!isNaN(n) && n > 0) {
+          if (!isNaN(n) && n >= -1) {
             provider.maxTokens = n;
             await this.plugin.saveSettings();
           }

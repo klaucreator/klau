@@ -19,12 +19,12 @@ function safeJson(res) {
 }
 
 async function sendToOpenAICompatible(messages, provider, systemText) {
-  const maxTokens = provider.maxTokens || 8192;
+  const maxTokens = provider.maxTokens || -1;
   const body = {
     model: provider.model,
-    max_tokens: maxTokens,
     messages: systemText ? [{ role: 'system', content: systemText }, ...messages] : messages,
   };
+  if (maxTokens > 0) body.max_tokens = maxTokens;
 
   const res = await requestUrl({
     url: `${provider.baseUrl.replace(/\/$/, '')}/chat/completions`,
@@ -52,7 +52,7 @@ async function sendToOpenAICompatible(messages, provider, systemText) {
   }
 
   const parsed = safeJson(res);
-  if (parsed.choices?.[0]?.finish_reason === 'length') {
+  if (maxTokens > 0 && parsed.choices?.[0]?.finish_reason === 'length') {
     throw new Error(
       `Response was cut off after hitting the ${maxTokens}-token limit before finishing. ` +
       `Try a smaller/simpler step, or ask the agent to keep its final summary shorter.`
@@ -62,13 +62,13 @@ async function sendToOpenAICompatible(messages, provider, systemText) {
 }
 
 async function streamOpenAICompatible(messages, provider, systemText, onDelta, signal) {
-  const maxTokens = provider.maxTokens || 8192;
+  const maxTokens = provider.maxTokens || -1;
   const body = {
     model: provider.model,
-    max_tokens: maxTokens,
     stream: true,
     messages: systemText ? [{ role: 'system', content: systemText }, ...messages] : messages,
   };
+  if (maxTokens > 0) body.max_tokens = maxTokens;
 
   const timeout = provider.timeoutMs || 120000;
   const controller = new AbortController();
@@ -101,12 +101,12 @@ async function streamOpenAICompatible(messages, provider, systemText, onDelta, s
 
   let truncated = false;
   const text = await readSse(res.body, (evt, full) => {
-    if (evt.choices?.[0]?.finish_reason === 'length') truncated = true;
+    if (maxTokens > 0 && evt.choices?.[0]?.finish_reason === 'length') truncated = true;
     const delta = evt.choices?.[0]?.delta?.content;
     return delta ? full + delta : full;
   }, onDelta);
 
-  if (truncated) {
+  if (maxTokens > 0 && truncated) {
     throw new Error(
       `Response was cut off after hitting the ${maxTokens}-token limit before finishing. ` +
       `Try a smaller/simpler step, or ask the agent to keep its final summary shorter.`
