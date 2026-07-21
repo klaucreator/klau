@@ -196,11 +196,11 @@ class AIChatSettingTab extends PluginSettingTab {
         const id = 'provider-' + Date.now();
         this.plugin.settings.providers.push({
           id,
-          name: 'New provider',
-          type: 'openai-compatible',
+          name: 'Self-hosted / Local',
+          type: 'self-hosted',
           apiKey: '',
-          baseUrl: 'https://api.openai.com/v1',
-          model: 'gpt-4o',
+          baseUrl: 'http://localhost:11434/v1',
+          model: 'llama3.1',
         });
         await this.plugin.saveSettings();
         this.display();
@@ -259,15 +259,19 @@ class AIChatSettingTab extends PluginSettingTab {
     new Setting(box).setName('Type').addDropdown((drop) => {
       drop.addOption('anthropic', 'Claude (Anthropic API)');
       drop.addOption('openai-compatible', 'OpenAI-compatible endpoint');
+      drop.addOption('self-hosted', 'Self-hosted / Local (Ollama, LM Studio, etc.)');
       drop.setValue(provider.type);
       drop.onChange(async (value) => {
         provider.type = value;
+        if (value === 'self-hosted' && !provider.baseUrl) {
+          provider.baseUrl = 'http://localhost:11434/v1';
+        }
         await this.plugin.saveSettings();
         this.display();
       });
     });
 
-    new Setting(box).setName('API key').addText((text) => {
+    const apiKeySetting = new Setting(box).setName('API key').addText((text) => {
       text.inputEl.type = 'password';
       text.setValue(provider.apiKey);
       text.onChange(async (value) => {
@@ -275,6 +279,12 @@ class AIChatSettingTab extends PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
+    if (provider.type === 'self-hosted') {
+      apiKeySetting.setDesc('Optional for local models (Ollama, LM Studio, etc.)');
+      apiKeySetting.settingEl.style.opacity = '0.6';
+    } else {
+      apiKeySetting.settingEl.style.opacity = '1';
+    }
 
     this.renderSavedApiKeys(box, provider);
 
@@ -283,7 +293,9 @@ class AIChatSettingTab extends PluginSettingTab {
       .setDesc(
         provider.type === 'anthropic'
           ? 'Usually https://api.anthropic.com'
-          : 'e.g. https://api.openai.com/v1, or your self-hosted / local endpoint'
+          : provider.type === 'self-hosted'
+            ? 'e.g. http://localhost:11434/v1 (Ollama), http://localhost:1234/v1 (LM Studio)'
+            : 'e.g. https://api.openai.com/v1, or your self-hosted / local endpoint'
       )
       .addText((text) => {
         text.setValue(provider.baseUrl);

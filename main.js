@@ -37,6 +37,16 @@ var require_constants = __commonJS({
           model: "gpt-4o",
           maxTokens: -1,
           timeoutMs: 12e4
+        },
+        {
+          id: "self-hosted",
+          name: "Self-hosted / Local",
+          type: "self-hosted",
+          apiKey: "",
+          baseUrl: "http://localhost:11434/v1",
+          model: "llama3.1",
+          maxTokens: -1,
+          timeoutMs: 12e4
         }
       ],
       activeProviderId: "claude",

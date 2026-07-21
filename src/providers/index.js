@@ -14,6 +14,7 @@ function resolveActiveProvider(settings) {
 
 function assertUsableProvider(provider) {
   if (!provider) throw new Error('No AI provider configured. Add one in plugin settings.');
+  if (provider.type === 'self-hosted') return; // No API key required
   if (!provider.apiKey) {
     throw new Error(`No API key set for "${provider.name}". Add one in plugin settings.`);
   }
