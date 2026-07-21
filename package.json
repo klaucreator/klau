@@ -1,0 +1,17 @@
+{
+  "name": "ai-chat-sidebar",
+  "version": "1.2.3",
+  "description": "Chat with Claude or any OpenAI-compatible AI provider from a sidebar panel, plus a living village view that shows your agents at work.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "esbuild": "0.27.7",
+    "obsidian": "latest",
+    "typescript": "^5.5.0"
+  }
+}

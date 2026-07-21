@@ -1,0 +1,835 @@
+.ai-chat-sidebar-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 8px;
+}
+
+.ai-chat-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.ai-chat-provider-select {
+  flex: 1;
+  min-width: 100px;
+}
+
+.ai-chat-include-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.ai-chat-clear-btn {
+  font-size: 12px;
+}
+
+.ai-chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 2px;
+}
+
+.ai-chat-message {
+  border-radius: 8px;
+  padding: 8px 10px;
+  max-width: 100%;
+}
+
+.ai-chat-message.ai-chat-user {
+  background: var(--background-modifier-hover);
+}
+
+.ai-chat-message.ai-chat-assistant {
+  background: var(--background-secondary);
+}
+
+.ai-chat-role {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.ai-chat-body {
+  white-space: pre-wrap;
+  font-size: 14px;
+  color: var(--text-normal);
+}
+
+.ai-chat-input-area {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.ai-chat-input {
+  resize: vertical;
+  width: 100%;
+  font-family: inherit;
+}
+
+.ai-chat-send-btn {
+  align-self: flex-end;
+}
+
+.ai-chat-provider-box {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+}
+
+.ai-organize-modal {
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.ai-organize-list {
+  overflow-y: auto;
+  flex: 1;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ai-organize-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--background-secondary);
+}
+
+.ai-organize-row input[type='checkbox'] {
+  margin-top: 3px;
+}
+
+.ai-organize-desc {
+  flex: 1;
+}
+
+.ai-organize-action-label {
+  font-size: 13px;
+  color: var(--text-normal);
+}
+
+.ai-organize-reason {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.ai-organize-footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-top: 8px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.ai-agent-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 8px;
+}
+
+.ai-agent-input-area {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.ai-agent-input {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.ai-agent-btn-row {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.ai-agent-log {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 2px;
+}
+
+.ai-agent-step {
+  font-size: 13px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  white-space: pre-wrap;
+}
+
+.ai-agent-goal {
+  background: var(--background-modifier-hover);
+  font-weight: 600;
+}
+
+.ai-agent-thought {
+  color: var(--text-muted);
+  font-style: italic;
+  background: transparent;
+  padding-left: 8px;
+}
+
+.ai-agent-action {
+  background: var(--background-secondary);
+  font-family: var(--font-monospace);
+  font-size: 12px;
+}
+
+.ai-agent-result {
+  background: var(--background-secondary-alt, var(--background-secondary));
+}
+
+.ai-agent-skipped {
+  color: var(--text-muted);
+}
+
+.ai-agent-error {
+  /* Deliberately NOT using var(--background-modifier-error)/var(--text-error) alone here —
+     in some themes those two resolve to nearly the same solid red, which makes the text
+     unreadable (looks like a plain red block). Fixed, low-opacity colors guarantee contrast
+     against any theme's text color instead. */
+  background: rgba(220, 38, 38, 0.15);
+  border: 1px solid rgba(220, 38, 38, 0.45);
+  color: var(--text-normal);
+}
+
+.ai-agent-final {
+  background: rgba(34, 197, 94, 0.15);
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  color: var(--text-normal);
+  font-weight: 600;
+}
+
+.ai-agent-thinking {
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px dashed var(--background-modifier-border);
+  font-family: var(--font-monospace);
+  font-size: 12px;
+  animation: ai-agent-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes ai-agent-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+.ai-agent-step-counter {
+  flex: 1;
+  align-self: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.ai-agent-team-box {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 8px;
+}
+
+.ai-agent-team-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.ai-agent-team-roster {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ai-agent-team-roster-item {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.ai-agent-team-header {
+  font-weight: 700;
+  color: var(--text-accent);
+  background: transparent;
+  padding-top: 10px;
+}
+
+.ai-agent-approval {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 8px;
+  background: var(--background-primary);
+}
+
+.ai-agent-approval-label {
+  font-size: 13px;
+  margin-bottom: 6px;
+  font-family: var(--font-monospace);
+}
+
+.ai-agent-approval-btns {
+  display: flex;
+  gap: 8px;
+}
+
+.ai-agent-approval-done {
+  opacity: 0.5;
+}
+
+.ai-agent-approval-context {
+  font-size: 12px;
+  font-family: var(--font-monospace);
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  word-break: break-word;
+}
+
+.ai-agent-approval-field-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.ai-agent-approval-field {
+  width: 100%;
+  font-family: var(--font-monospace);
+  font-size: 12px;
+  margin-bottom: 8px;
+  resize: vertical;
+}
+
+/* ======================== AI Village ======================== */
+
+.ai-village-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 8px;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 0;
+}
+
+.ai-village-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ai-village-title {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.ai-village-legend {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow-x: auto;
+}
+
+.ai-village-night-toggle {
+  font-size: 12px;
+}
+
+.ai-village-scene-wrap {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  flex-shrink: 0;
+  min-height: 0;
+}
+
+.ai-village-scene {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 10px;
+  overflow: hidden;
+  background-color: #2b2f1f;
+  background-size: cover;
+  background-position: center;
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.35);
+  transition: filter 1.2s ease;
+  min-height: 200px;
+}
+
+.ai-village-night-overlay {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 40%, rgba(20, 24, 60, 0.05), rgba(8, 10, 30, 0.55));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 1.4s ease;
+  z-index: 5;
+}
+
+.ai-village-scene.is-night .ai-village-night-overlay {
+  opacity: 1;
+}
+
+.ai-village-scene.is-busy {
+  filter: saturate(1.15) brightness(1.03);
+}
+
+.ai-village-sprite-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+
+/* --- Buildings --- */
+
+.ai-village-building {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 14%;
+  height: 14%;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.ai-village-building-label {
+  display: none;
+}
+
+.ai-village-building-glow {
+  position: absolute;
+  inset: -6%;
+  border-radius: 50%;
+  opacity: 0;
+  transition: opacity 0.8s ease, background 0.8s ease;
+  filter: blur(6px);
+}
+
+.ai-village-building.is-meeting .ai-village-building-glow {
+  opacity: 0.5;
+  background: radial-gradient(circle, rgba(170, 140, 255, 0.85), transparent 70%);
+  animation: ai-village-pulse 1.5s ease-in-out infinite;
+}
+
+.ai-village-building.is-working .ai-village-building-glow {
+  opacity: 0.55;
+  background: radial-gradient(circle, rgba(255, 200, 90, 0.85), transparent 70%);
+  animation: ai-village-pulse 1.8s ease-in-out infinite;
+}
+
+.ai-village-building.is-reviewing .ai-village-building-glow {
+  opacity: 0.5;
+  background: radial-gradient(circle, rgba(120, 180, 255, 0.8), transparent 70%);
+  animation: ai-village-blink 1.4s steps(2, jump-none) infinite;
+}
+
+.ai-village-building.is-waiting .ai-village-building-glow {
+  opacity: 0.4;
+  background: radial-gradient(circle, rgba(200, 200, 200, 0.7), transparent 70%);
+}
+
+.ai-village-building.is-error .ai-village-building-glow {
+  opacity: 0.6;
+  background: radial-gradient(circle, rgba(255, 70, 70, 0.85), transparent 70%);
+  animation: ai-village-blink 0.9s steps(2, jump-none) infinite;
+}
+
+.ai-village-building.is-finished .ai-village-building-glow {
+  opacity: 0.65;
+  background: radial-gradient(circle, rgba(255, 221, 120, 0.95), transparent 70%);
+  animation: ai-village-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes ai-village-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.18); }
+}
+
+@keyframes ai-village-blink {
+  0%, 49% { opacity: 0.55; }
+  50%, 100% { opacity: 0.1; }
+}
+
+.ai-village-building-smoke {
+  position: absolute;
+  left: 50%;
+  top: -4%;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(235, 235, 235, 0.75);
+  opacity: 0;
+}
+
+.ai-village-building.is-working .ai-village-building-smoke {
+  opacity: 0.85;
+  animation: ai-village-smoke 2.6s ease-out infinite;
+}
+
+.ai-village-scene.is-busy .ai-village-building.is-working .ai-village-building-smoke {
+  animation-duration: 1.5s;
+}
+
+@keyframes ai-village-smoke {
+  0% { transform: translate(-50%, 0) scale(0.6); opacity: 0.8; }
+  100% { transform: translate(-80%, -220%) scale(1.6); opacity: 0; }
+}
+
+.ai-village-building-bar {
+  position: absolute;
+  left: 10%;
+  right: 10%;
+  bottom: -14%;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+
+.ai-village-building.is-working .ai-village-building-bar,
+.ai-village-building.is-reviewing .ai-village-building-bar {
+  opacity: 1;
+}
+
+.ai-village-building-bar-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 40%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, rgba(255, 210, 110, 0.2), rgba(255, 210, 110, 0.95), rgba(255, 210, 110, 0.2));
+  animation: ai-village-bar-slide 1.3s linear infinite;
+}
+
+@keyframes ai-village-bar-slide {
+  0% { left: -40%; }
+  100% { left: 100%; }
+}
+
+.ai-village-building-banner {
+  position: absolute;
+  top: -18%;
+  left: 50%;
+  transform: translateX(-50%) scale(0.8);
+  font-size: 14px;
+  background: #c93b3b;
+  color: #fff;
+  border-radius: 4px;
+  padding: 0 4px;
+  opacity: 0;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.ai-village-building.is-error .ai-village-building-banner {
+  opacity: 1;
+  transform: translateX(-50%) scale(1);
+}
+
+/* --- Villagers --- */
+
+.ai-village-villager {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  transition: left 3.6s ease-in-out, top 3.6s ease-in-out, opacity 0.5s ease;
+  z-index: 6;
+  text-align: center;
+  cursor: default;
+}
+
+.ai-village-villager-badge {
+  font-size: 20px;
+  line-height: 1;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+  animation: ai-village-bob 2.4s ease-in-out infinite;
+}
+
+.ai-village-villager-sprite {
+  width: 40px;
+  height: 40px;
+  margin: 0 auto;
+  position: relative;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+  animation: ai-village-bob 2.4s ease-in-out infinite;
+}
+
+.ai-village-villager-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: pixelated;
+  display: block;
+}
+
+/* Hidden by default — only shown if the sprite art fails to load (see img.onerror in
+   ensureVillagerEl), so a missing characters/ folder falls back to a clear emoji badge
+   instead of leaving the villager invisible. */
+.ai-village-villager-fallback-badge {
+  display: none;
+}
+
+.ai-village-villager.sprite-failed .ai-village-villager-img {
+  display: none;
+}
+
+.ai-village-villager.sprite-failed .ai-village-villager-fallback-badge {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 40px;
+  text-align: center;
+}
+
+.ai-village-villager.sprite-failed .ai-village-villager-sprite {
+  position: relative;
+}
+
+.ai-village-villager.status-working .ai-village-villager-badge,
+.ai-village-villager.status-error .ai-village-villager-badge,
+.ai-village-villager.status-meeting .ai-village-villager-badge,
+.ai-village-villager.status-working .ai-village-villager-sprite,
+.ai-village-villager.status-error .ai-village-villager-sprite,
+.ai-village-villager.status-meeting .ai-village-villager-sprite {
+  animation: ai-village-bob-fast 0.9s ease-in-out infinite;
+}
+
+@keyframes ai-village-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+
+@keyframes ai-village-bob-fast {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-1px) rotate(-4deg); }
+}
+
+.ai-village-villager-mood {
+  position: absolute;
+  top: -14px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+}
+
+.ai-village-villager-tag {
+  margin-top: 2px;
+  font-size: 9px;
+  color: #fff;
+  background: rgba(20, 20, 20, 0.65);
+  padding: 1px 4px;
+  border-radius: 4px;
+  white-space: nowrap;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ai-village-villager.status-idle .ai-village-villager-tag { opacity: 0.85; }
+.ai-village-villager.status-finished .ai-village-villager-badge,
+.ai-village-villager.status-finished .ai-village-villager-sprite { animation: ai-village-celebrate 0.6s ease-in-out 2; }
+
+@keyframes ai-village-celebrate {
+  0%, 100% { transform: scale(1) translateY(0); }
+  50% { transform: scale(1.35) translateY(-6px); }
+}
+
+.ai-village-villager.is-sleeping {
+  opacity: 0.45;
+  filter: grayscale(0.4);
+}
+.ai-village-villager.is-sleeping .ai-village-villager-badge,
+.ai-village-villager.is-sleeping .ai-village-villager-sprite {
+  animation: none;
+}
+
+.ai-village-villager.is-collaborating .ai-village-villager-badge,
+.ai-village-villager.is-collaborating .ai-village-villager-sprite {
+  filter: drop-shadow(0 0 4px rgba(255, 220, 130, 0.9));
+}
+
+.ai-village-villager.status-working,
+.ai-village-villager.status-meeting {
+  transition: left 0.9s ease, top 0.9s ease, opacity 0.5s ease;
+}
+
+.ai-village-villager.is-chatting .ai-village-villager-bubble {
+  display: block;
+}
+
+.ai-village-villager-bubble {
+  position: absolute;
+  top: -28px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #222;
+  padding: 2px 6px;
+  border-radius: 6px;
+  white-space: nowrap;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+/* --- Messengers & ambient life --- */
+
+.ai-village-messenger {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-size: 16px;
+  transition: left 2.4s linear, top 2.4s linear;
+  z-index: 7;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+  animation: ai-village-bob 0.5s ease-in-out infinite;
+}
+
+/* --- Feed --- */
+
+.ai-village-feed-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 90px;
+  max-width: 760px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.ai-village-feed-tabs {
+  display: flex;
+  flex-direction: row;
+  gap: 6px;
+}
+
+.ai-village-feed-panel-wrap {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.ai-village-feed-tab {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--background-modifier-active-hover);
+  border-radius: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ai-village-feed-tab.is-active {
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+}
+
+.ai-village-feed {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--background-secondary);
+  border-radius: 6px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ai-village-console {
+  font-family: var(--font-monospace);
+  gap: 1px;
+}
+
+.ai-village-console-row {
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ai-village-console-time {
+  color: var(--text-faint);
+  margin-right: 6px;
+}
+
+.ai-village-console-level {
+  font-weight: 700;
+  margin-right: 6px;
+}
+
+.ai-village-console-row.level-log .ai-village-console-level,
+.ai-village-console-row.level-debug .ai-village-console-level {
+  color: var(--text-muted);
+}
+
+.ai-village-console-row.level-info .ai-village-console-level {
+  color: var(--text-accent);
+}
+
+.ai-village-console-row.level-warn .ai-village-console-level {
+  color: var(--text-warning, #e0a030);
+}
+
+.ai-village-console-row.level-warn .ai-village-console-text {
+  color: var(--text-warning, #e0a030);
+}
+
+.ai-village-console-row.level-error .ai-village-console-level {
+  color: var(--text-error, #e05050);
+}
+
+.ai-village-console-row.level-error .ai-village-console-text {
+  color: var(--text-error, #e05050);
+}
+
+.ai-village-console-text {
+  color: var(--text-normal);
+}
+
+.ai-village-feed-row {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.ai-village-feed-from {
+  font-weight: 600;
+  color: var(--text-accent);
+}
+
+.ai-village-feed-text {
+  color: var(--text-normal);
+}
