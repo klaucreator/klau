@@ -13,6 +13,6 @@
     "skipLibCheck": true,
     "lib": ["DOM", "ES2020"]
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["**/.trashed-*", "node_modules"]
+  "include": ["src/**/*"],
+  "exclude": ["**/.trashed-*", "node_modules", "dist", "build"]
 }
