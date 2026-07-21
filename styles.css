@@ -704,6 +704,71 @@
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
+/* --- Walking state --- */
+
+.ai-village-villager.status-walking {
+  z-index: 7;
+}
+
+.ai-village-villager.status-walking .ai-village-villager-sprite {
+  animation: ai-village-walk 0.5s ease-in-out infinite;
+}
+
+@keyframes ai-village-walk {
+  0%, 100% { transform: translateY(0); }
+  25% { transform: translateY(-2px); }
+  75% { transform: translateY(1px); }
+}
+
+/* --- Reading vs Writing sub-status --- */
+
+.ai-village-villager-activity {
+  position: absolute;
+  top: -20px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  pointer-events: none;
+}
+
+.ai-village-villager.is-reading .ai-village-villager-activity,
+.ai-village-villager.is-writing .ai-village-villager-activity {
+  opacity: 1;
+}
+
+.ai-village-villager.is-reading .ai-village-villager-sprite {
+  animation: ai-village-read 2.4s ease-in-out infinite;
+}
+
+.ai-village-villager.is-writing .ai-village-villager-sprite {
+  animation: ai-village-write 0.8s ease-in-out infinite;
+}
+
+@keyframes ai-village-read {
+  0%, 100% { transform: translateY(0) scaleX(1); }
+  50% { transform: translateY(-1px) scaleX(-1); }
+}
+
+@keyframes ai-village-write {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  25% { transform: translateY(-1px) rotate(-3deg); }
+  75% { transform: translateY(1px) rotate(2deg); }
+}
+
+/* --- Bubble states --- */
+
+.ai-village-villager.has-bubble .ai-village-villager-bubble {
+  display: block;
+  animation: ai-village-bubble-in 0.3s ease-out;
+}
+
+@keyframes ai-village-bubble-in {
+  0% { transform: translateX(-50%) scale(0.5); opacity: 0; }
+  100% { transform: translateX(-50%) scale(1); opacity: 1; }
+}
+
 /* --- Messengers & ambient life --- */
 
 .ai-village-messenger {
@@ -832,4 +897,174 @@
 
 .ai-village-feed-text {
   color: var(--text-normal);
+}
+
+/* --- Diagnostics Panel --- */
+
+.ai-village-diag-btn {
+  font-size: 11px;
+  padding: 2px 6px;
+}
+
+.ai-village-diag-panel {
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--background-secondary);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-family: var(--font-monospace);
+}
+
+.ai-village-diag-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 700;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+.ai-village-diag-close {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.ai-village-diag-agent {
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding-bottom: 4px;
+}
+
+.ai-village-diag-agent-name {
+  font-weight: 600;
+  font-size: 11px;
+  margin-bottom: 2px;
+}
+
+.ai-village-diag-entry {
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ai-village-diag-entry.is-error {
+  background: rgba(220, 38, 38, 0.1);
+}
+
+.ai-village-diag-tool {
+  font-weight: 600;
+  color: var(--text-accent);
+}
+
+.ai-village-diag-args {
+  color: var(--text-muted);
+}
+
+.ai-village-diag-result {
+  color: var(--text-normal);
+}
+
+.ai-village-diag-empty {
+  color: var(--text-muted);
+  font-family: var(--font-text);
+  font-size: 12px;
+}
+
+/* --- Sub-agent list tab --- */
+
+.ai-village-subagent-list {
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ai-village-agent-row {
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.ai-village-agent-row:nth-child(odd) {
+  background: var(--background-modifier-hover);
+}
+
+.ai-village-agent-row.is-subagent {
+  font-style: italic;
+  opacity: 0.8;
+  padding-left: 16px;
+}
+
+.ai-village-agent-emoji {
+  font-size: 14px;
+  width: 20px;
+  text-align: center;
+}
+
+.ai-village-agent-name {
+  font-weight: 600;
+  min-width: 100px;
+}
+
+.ai-village-agent-status {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.ai-village-agent-status.is-error {
+  color: var(--text-error);
+}
+
+.ai-village-agent-status.is-finished {
+  color: var(--text-accent);
+}
+
+.ai-village-agent-task {
+  color: var(--text-muted);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+
+/* --- Sub-agent villagers --- */
+
+.ai-village-villager.is-subagent {
+  z-index: 4;
+  pointer-events: none;
+}
+
+.ai-village-villager.is-subagent .ai-village-villager-badge {
+  font-size: 14px;
+  filter: drop-shadow(0 0 3px rgba(100, 200, 255, 0.6));
+  animation: ai-village-subagent-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes ai-village-subagent-pulse {
+  0%, 100% { opacity: 0.7; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+
+.ai-village-villager.is-subagent .ai-village-villager-tag {
+  font-size: 7px;
+  background: rgba(40, 80, 120, 0.7);
+}
+
+.is-subagent-badge {
+  font-size: 14px;
+  animation: ai-village-subagent-pulse 1.2s ease-in-out infinite;
+}
+
+/* --- Parallel Run button --- */
+
+.ai-agent-btn-row .ai-agent-btn-row button {
+  margin: 0 2px;
 }
