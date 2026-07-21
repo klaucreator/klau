@@ -238,6 +238,22 @@ class AIChatSettingTab extends PluginSettingTab {
         this.display();
       });
     });
+
+    new Setting(containerEl).addButton((btn) => {
+      btn.setButtonText('Add Transformers.js (In-browser)').onClick(async () => {
+        const id = 'provider-' + Date.now();
+        this.plugin.settings.providers.push({
+          id,
+          name: 'Transformers.js (In-browser)',
+          type: 'transformers-js',
+          apiKey: '',
+          baseUrl: 'local://transformers-js',
+          model: 'Xenova/Phi-3.5-mini-instruct',
+        });
+        await this.plugin.saveSettings();
+        this.display();
+      });
+    });
   }
 
   renderTeamMemberSettings(containerEl, member) {
@@ -296,6 +312,7 @@ class AIChatSettingTab extends PluginSettingTab {
       drop.addOption('zerollm', 'ZeroLLM (http://localhost:8000/v1)');
       drop.addOption('tgi', 'Text-Generation-Inference (http://localhost:8080/v1)');
       drop.addOption('llamacpp', 'llama.cpp server (http://localhost:8080/v1)');
+      drop.addOption('transformers-js', 'Transformers.js (in-browser, no server)');
       drop.setValue(provider.type);
       drop.onChange(async (value) => {
         provider.type = value;
@@ -304,6 +321,10 @@ class AIChatSettingTab extends PluginSettingTab {
         if (value === 'zerollm' && !provider.baseUrl) provider.baseUrl = 'http://localhost:8000/v1';
         if (value === 'tgi' && !provider.baseUrl) provider.baseUrl = 'http://localhost:8080/v1';
         if (value === 'llamacpp' && !provider.baseUrl) provider.baseUrl = 'http://localhost:8080/v1';
+        if (value === 'transformers-js') {
+          provider.baseUrl = 'local://transformers-js';
+          if (!provider.model) provider.model = 'Xenova/Phi-3.5-mini-instruct';
+        }
         await this.plugin.saveSettings();
         this.display();
       });
@@ -317,9 +338,10 @@ class AIChatSettingTab extends PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
-    if (provider.type === 'self-hosted') {
-      apiKeySetting.setDesc('Optional for local models (Ollama, LM Studio, etc.)');
-      apiKeySetting.settingEl.style.opacity = '0.6';
+    const noKeyTypes = ['self-hosted', 'lmstudio', 'zerollm', 'tgi', 'llamacpp', 'transformers-js'];
+    if (noKeyTypes.includes(provider.type)) {
+      apiKeySetting.setDesc('Not needed for this provider type');
+      apiKeySetting.settingEl.style.opacity = '0.5';
     } else {
       apiKeySetting.settingEl.style.opacity = '1';
     }
@@ -341,7 +363,9 @@ class AIChatSettingTab extends PluginSettingTab {
                   ? 'TGI: http://localhost:8080/v1'
                   : provider.type === 'llamacpp'
                     ? 'llama.cpp: http://localhost:8080/v1'
-                    : 'e.g. https://api.openai.com/v1, or your self-hosted / local endpoint'
+                    : provider.type === 'transformers-js'
+                      ? 'Runs in browser (WebGPU/WASM) — no server needed'
+                      : 'e.g. https://api.openai.com/v1, or your self-hosted / local endpoint'
       )
       .addText((text) => {
         text.setValue(provider.baseUrl);
