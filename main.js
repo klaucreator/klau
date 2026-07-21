@@ -652,7 +652,7 @@ var require_agent_loop = __commonJS({
     function isRetryableAgentError(err) {
       if (err && [429, 500, 502, 503, 504, 529].includes(err.status)) return true;
       const msg = (err && err.message || "").toLowerCase();
-      return msg.includes("network") || msg.includes("fetch failed") || msg.includes("econnreset") || msg.includes("timeout") || msg.includes("rate limit") || msg.includes("overloaded");
+      return msg.includes("network") || msg.includes("fetch failed") || msg.includes("econnreset") || msg.includes("timeout") || msg.includes("overloaded");
     }
     async function agentCallOnce(apiMessages, provider, systemText, onDelta) {
       try {

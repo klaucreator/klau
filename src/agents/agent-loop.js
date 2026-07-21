@@ -32,7 +32,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Network hiccups and provider-side rate limiting/overload are worth a couple of automatic
+// Network hiccups and provider-side overload are worth a couple of automatic
 // retries; anything else (bad API key, malformed request, model refusing) is not.
 function isRetryableAgentError(err) {
   if (err && [429, 500, 502, 503, 504, 529].includes(err.status)) return true;
@@ -42,7 +42,6 @@ function isRetryableAgentError(err) {
     msg.includes('fetch failed') ||
     msg.includes('econnreset') ||
     msg.includes('timeout') ||
-    msg.includes('rate limit') ||
     msg.includes('overloaded')
   );
 }
