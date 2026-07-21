@@ -110,8 +110,26 @@ class VillageView extends ItemView {
     }
 
     const feedWrap = container.createDiv({ cls: 'ai-village-feed-wrap' });
-    feedWrap.createDiv({ cls: 'ai-village-feed-title', text: 'Village chatter' });
-    this.feedEl = feedWrap.createDiv({ cls: 'ai-village-feed' });
+    const tabRow = feedWrap.createDiv({ cls: 'ai-village-feed-tabs' });
+    this.chatterTab = tabRow.createDiv({ cls: 'ai-village-feed-tab is-active', text: 'Chatter' });
+    this.consoleTab = tabRow.createDiv({ cls: 'ai-village-feed-tab', text: 'Console' });
+    const panelWrap = feedWrap.createDiv({ cls: 'ai-village-feed-panel-wrap' });
+    this.feedEl = panelWrap.createDiv({ cls: 'ai-village-feed' });
+    this.consoleEl = panelWrap.createDiv({ cls: 'ai-village-feed ai-village-console' });
+    this.consoleEl.style.display = 'none';
+
+    this.chatterTab.addEventListener('click', () => {
+      this.chatterTab.addClass('is-active');
+      this.consoleTab.removeClass('is-active');
+      this.feedEl.style.display = 'flex';
+      this.consoleEl.style.display = 'none';
+    });
+    this.consoleTab.addEventListener('click', () => {
+      this.consoleTab.addClass('is-active');
+      this.chatterTab.removeClass('is-active');
+      this.feedEl.style.display = 'none';
+      this.consoleEl.style.display = 'flex';
+    });
 
     this.unsub = this.plugin.village.subscribe(() => this.sync());
     this.wanderInterval = window.setInterval(() => this.wanderTick(), 4200);
@@ -471,7 +489,7 @@ class VillageView extends ItemView {
       }
     }
 
-    // Feed
+    // Feed — chatter tab
     this.feedEl.empty();
     const recent = village.feed.slice(-14);
     for (const entry of recent) {
@@ -480,6 +498,24 @@ class VillageView extends ItemView {
       row.createSpan({ cls: 'ai-village-feed-text', text: entry.text });
     }
     this.feedEl.scrollTop = this.feedEl.scrollHeight;
+
+    // Console tab
+    this.consoleEl.empty();
+    const consoleEntries = village.consoleEntries;
+    for (const entry of consoleEntries) {
+      const row = this.consoleEl.createDiv({ cls: `ai-village-console-row level-${entry.level}` });
+      const time = new Date(entry.ts);
+      const timeStr = time.getHours().toString().padStart(2, '0') + ':' + time.getMinutes().toString().padStart(2, '0') + ':' + time.getSeconds().toString().padStart(2, '0');
+      row.createSpan({ cls: 'ai-village-console-time', text: timeStr });
+      row.createSpan({ cls: 'ai-village-console-level', text: '[' + entry.level.toUpperCase() + ']' });
+      row.createSpan({ cls: 'ai-village-console-text', text: entry.message });
+      row.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const full = timeStr + ' [' + entry.level.toUpperCase() + '] ' + entry.message;
+        navigator.clipboard.writeText(full).catch(() => {});
+      });
+    }
+    this.consoleEl.scrollTop = this.consoleEl.scrollHeight;
   }
 }
 

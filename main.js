@@ -1267,6 +1267,7 @@ var require_village_store = __commonJS({
         this.plugin = plugin;
         this.villagers = /* @__PURE__ */ new Map();
         this.feed = [];
+        this.consoleEntries = [];
         this.messengers = [];
         this.listeners = /* @__PURE__ */ new Set();
         this._idleTimers = /* @__PURE__ */ new Map();
@@ -1301,6 +1302,7 @@ var require_village_store = __commonJS({
           v.name = name;
         }
         this._emit();
+        this.log("info", `${v.name} arrived (${VILLAGE_PROFESSIONS[professionKey]?.title || professionKey})`);
         return v;
       }
       setStatus(key, status, opts) {
@@ -1319,6 +1321,8 @@ var require_village_store = __commonJS({
         else if (status === "idle") v.mood = "happy";
         v.updatedAt = Date.now();
         this._emit();
+        const statusLabel = { working: "started working", meeting: "entered a meeting", reviewing: "is reviewing", waiting: "is waiting", finished: "finished", error: "hit an error", idle: "is now idle" }[status] || status;
+        this.log(status === "error" ? "error" : status === "waiting" ? "warn" : "log", `${v.name} ${statusLabel}${opts.taskText ? ": " + opts.taskText : ""}`);
         if (status === "finished" || status === "error") {
           const t = setTimeout(() => {
             if (this.villagers.get(key)?.status === status) {
@@ -1334,6 +1338,14 @@ var require_village_store = __commonJS({
         const entry = { ts: Date.now(), from, text, key };
         this.feed.push(entry);
         if (this.feed.length > 50) this.feed.shift();
+        this._emit();
+        this.log("log", `${from}: ${text.slice(0, 120)}`);
+        return entry;
+      }
+      log(level, message) {
+        const entry = { ts: Date.now(), level: level || "log", message: String(message) };
+        this.consoleEntries.push(entry);
+        if (this.consoleEntries.length > 200) this.consoleEntries.shift();
         this._emit();
         return entry;
       }
@@ -1960,8 +1972,25 @@ var require_village_view = __commonJS({
           this.buildingEls.set(key, el);
         }
         const feedWrap = container.createDiv({ cls: "ai-village-feed-wrap" });
-        feedWrap.createDiv({ cls: "ai-village-feed-title", text: "Village chatter" });
-        this.feedEl = feedWrap.createDiv({ cls: "ai-village-feed" });
+        const tabRow = feedWrap.createDiv({ cls: "ai-village-feed-tabs" });
+        this.chatterTab = tabRow.createDiv({ cls: "ai-village-feed-tab is-active", text: "Chatter" });
+        this.consoleTab = tabRow.createDiv({ cls: "ai-village-feed-tab", text: "Console" });
+        const panelWrap = feedWrap.createDiv({ cls: "ai-village-feed-panel-wrap" });
+        this.feedEl = panelWrap.createDiv({ cls: "ai-village-feed" });
+        this.consoleEl = panelWrap.createDiv({ cls: "ai-village-feed ai-village-console" });
+        this.consoleEl.style.display = "none";
+        this.chatterTab.addEventListener("click", () => {
+          this.chatterTab.addClass("is-active");
+          this.consoleTab.removeClass("is-active");
+          this.feedEl.style.display = "flex";
+          this.consoleEl.style.display = "none";
+        });
+        this.consoleTab.addEventListener("click", () => {
+          this.consoleTab.addClass("is-active");
+          this.chatterTab.removeClass("is-active");
+          this.feedEl.style.display = "none";
+          this.consoleEl.style.display = "flex";
+        });
         this.unsub = this.plugin.village.subscribe(() => this.sync());
         this.wanderInterval = window.setInterval(() => this.wanderTick(), 4200);
         this.tickInterval = window.setInterval(() => this.applyNightMode(), 6e4);
@@ -2284,6 +2313,23 @@ var require_village_view = __commonJS({
           row.createSpan({ cls: "ai-village-feed-text", text: entry.text });
         }
         this.feedEl.scrollTop = this.feedEl.scrollHeight;
+        this.consoleEl.empty();
+        const consoleEntries = village.consoleEntries;
+        for (const entry of consoleEntries) {
+          const row = this.consoleEl.createDiv({ cls: `ai-village-console-row level-${entry.level}` });
+          const time = new Date(entry.ts);
+          const timeStr = time.getHours().toString().padStart(2, "0") + ":" + time.getMinutes().toString().padStart(2, "0") + ":" + time.getSeconds().toString().padStart(2, "0");
+          row.createSpan({ cls: "ai-village-console-time", text: timeStr });
+          row.createSpan({ cls: "ai-village-console-level", text: "[" + entry.level.toUpperCase() + "]" });
+          row.createSpan({ cls: "ai-village-console-text", text: entry.message });
+          row.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const full = timeStr + " [" + entry.level.toUpperCase() + "] " + entry.message;
+            navigator.clipboard.writeText(full).catch(() => {
+            });
+          });
+        }
+        this.consoleEl.scrollTop = this.consoleEl.scrollHeight;
       }
     };
     module2.exports = { VillageView: VillageView2 };

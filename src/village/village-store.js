@@ -13,6 +13,7 @@ class VillageStore {
     this.plugin = plugin;
     this.villagers = new Map();
     this.feed = [];
+    this.consoleEntries = [];
     this.messengers = [];
     this.listeners = new Set();
     this._idleTimers = new Map();
@@ -47,6 +48,7 @@ class VillageStore {
       v.name = name;
     }
     this._emit();
+    this.log('info', `${v.name} arrived (${VILLAGE_PROFESSIONS[professionKey]?.title || professionKey})`);
     return v;
   }
 
@@ -66,6 +68,8 @@ class VillageStore {
     else if (status === 'idle') v.mood = 'happy';
     v.updatedAt = Date.now();
     this._emit();
+    const statusLabel = { working: 'started working', meeting: 'entered a meeting', reviewing: 'is reviewing', waiting: 'is waiting', finished: 'finished', error: 'hit an error', idle: 'is now idle' }[status] || status;
+    this.log(status === 'error' ? 'error' : status === 'waiting' ? 'warn' : 'log', `${v.name} ${statusLabel}${opts.taskText ? ': ' + opts.taskText : ''}`);
 
     if (status === 'finished' || status === 'error') {
       const t = setTimeout(() => {
@@ -83,6 +87,15 @@ class VillageStore {
     const entry = { ts: Date.now(), from, text, key };
     this.feed.push(entry);
     if (this.feed.length > 50) this.feed.shift();
+    this._emit();
+    this.log('log', `${from}: ${text.slice(0, 120)}`);
+    return entry;
+  }
+
+  log(level, message) {
+    const entry = { ts: Date.now(), level: level || 'log', message: String(message) };
+    this.consoleEntries.push(entry);
+    if (this.consoleEntries.length > 200) this.consoleEntries.shift();
     this._emit();
     return entry;
   }
