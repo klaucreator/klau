@@ -196,11 +196,43 @@ class AIChatSettingTab extends PluginSettingTab {
         const id = 'provider-' + Date.now();
         this.plugin.settings.providers.push({
           id,
-          name: 'Self-hosted / Local',
+          name: 'Ollama (local)',
           type: 'self-hosted',
           apiKey: '',
           baseUrl: 'http://localhost:11434/v1',
           model: 'llama3.1',
+        });
+        await this.plugin.saveSettings();
+        this.display();
+      });
+    });
+
+    new Setting(containerEl).addButton((btn) => {
+      btn.setButtonText('Add LM Studio').onClick(async () => {
+        const id = 'provider-' + Date.now();
+        this.plugin.settings.providers.push({
+          id,
+          name: 'LM Studio (local)',
+          type: 'lmstudio',
+          apiKey: '',
+          baseUrl: 'http://localhost:1234/v1',
+          model: 'local-model',
+        });
+        await this.plugin.saveSettings();
+        this.display();
+      });
+    });
+
+    new Setting(containerEl).addButton((btn) => {
+      btn.setButtonText('Add ZeroLLM').onClick(async () => {
+        const id = 'provider-' + Date.now();
+        this.plugin.settings.providers.push({
+          id,
+          name: 'ZeroLLM (local)',
+          type: 'zerollm',
+          apiKey: '',
+          baseUrl: 'http://localhost:8000/v1',
+          model: 'qwen2.5-7b',
         });
         await this.plugin.saveSettings();
         this.display();
@@ -259,13 +291,19 @@ class AIChatSettingTab extends PluginSettingTab {
     new Setting(box).setName('Type').addDropdown((drop) => {
       drop.addOption('anthropic', 'Claude (Anthropic API)');
       drop.addOption('openai-compatible', 'OpenAI-compatible endpoint');
-      drop.addOption('self-hosted', 'Self-hosted / Local (Ollama, LM Studio, etc.)');
+      drop.addOption('self-hosted', 'Ollama (http://localhost:11434/v1)');
+      drop.addOption('lmstudio', 'LM Studio (http://localhost:1234/v1)');
+      drop.addOption('zerollm', 'ZeroLLM (http://localhost:8000/v1)');
+      drop.addOption('tgi', 'Text-Generation-Inference (http://localhost:8080/v1)');
+      drop.addOption('llamacpp', 'llama.cpp server (http://localhost:8080/v1)');
       drop.setValue(provider.type);
       drop.onChange(async (value) => {
         provider.type = value;
-        if (value === 'self-hosted' && !provider.baseUrl) {
-          provider.baseUrl = 'http://localhost:11434/v1';
-        }
+        if (value === 'self-hosted' && !provider.baseUrl) provider.baseUrl = 'http://localhost:11434/v1';
+        if (value === 'lmstudio' && !provider.baseUrl) provider.baseUrl = 'http://localhost:1234/v1';
+        if (value === 'zerollm' && !provider.baseUrl) provider.baseUrl = 'http://localhost:8000/v1';
+        if (value === 'tgi' && !provider.baseUrl) provider.baseUrl = 'http://localhost:8080/v1';
+        if (value === 'llamacpp' && !provider.baseUrl) provider.baseUrl = 'http://localhost:8080/v1';
         await this.plugin.saveSettings();
         this.display();
       });
@@ -294,8 +332,16 @@ class AIChatSettingTab extends PluginSettingTab {
         provider.type === 'anthropic'
           ? 'Usually https://api.anthropic.com'
           : provider.type === 'self-hosted'
-            ? 'e.g. http://localhost:11434/v1 (Ollama), http://localhost:1234/v1 (LM Studio)'
-            : 'e.g. https://api.openai.com/v1, or your self-hosted / local endpoint'
+            ? 'Ollama: http://localhost:11434/v1'
+            : provider.type === 'lmstudio'
+              ? 'LM Studio: http://localhost:1234/v1'
+              : provider.type === 'zerollm'
+                ? 'ZeroLLM: http://localhost:8000/v1'
+                : provider.type === 'tgi'
+                  ? 'TGI: http://localhost:8080/v1'
+                  : provider.type === 'llamacpp'
+                    ? 'llama.cpp: http://localhost:8080/v1'
+                    : 'e.g. https://api.openai.com/v1, or your self-hosted / local endpoint'
       )
       .addText((text) => {
         text.setValue(provider.baseUrl);
