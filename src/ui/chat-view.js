@@ -8,6 +8,7 @@ class AIChatView extends ItemView {
     super(leaf);
     this.plugin = plugin;
     this.history = [];
+    this._abortController = null;
   }
 
   getViewType() {
@@ -52,13 +53,23 @@ class AIChatView extends ItemView {
     this.messagesEl = container.createDiv({ cls: 'ai-chat-messages' });
 
     const inputArea = container.createDiv({ cls: 'ai-chat-input-area' });
+
     this.inputEl = inputArea.createEl('textarea', {
       cls: 'ai-chat-input',
       attr: { placeholder: 'Ask anything... (Enter to send, Shift+Enter for newline)', rows: '3' },
     });
-    this.sendBtn = inputArea.createEl('button', { text: 'Send', cls: 'ai-chat-send-btn mod-cta' });
+    const btnRow = inputArea.createDiv({ cls: 'ai-chat-btn-row' });
+    this.sendBtn = btnRow.createEl('button', { text: 'Send', cls: 'ai-chat-send-btn mod-cta' });
+    this.stopBtn = btnRow.createEl('button', { text: 'Stop', cls: 'ai-chat-stop-btn' });
+    this.stopBtn.disabled = true;
 
     this.sendBtn.addEventListener('click', () => this.handleSend());
+    this.stopBtn.addEventListener('click', () => {
+      if (this._abortController) {
+        this._abortController.abort();
+        this._abortController = null;
+      }
+    });
     this.inputEl.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -92,30 +103,51 @@ class AIChatView extends ItemView {
     this.renderMessage('user', text);
     this.inputEl.value = '';
     this.sendBtn.disabled = true;
+    this.stopBtn.disabled = false;
 
-    const thinkingEl = this.renderMessage('assistant', 'Thinking...');
+    const msgEl = this.renderMessage('assistant', '');
+    const bodyEl = msgEl.querySelector('.ai-chat-body');
+    let accumulated = '';
 
     const village = this.plugin.village;
     village.ensure('innkeeper', 'innkeeper', 'Innkeeper');
     village.setStatus('innkeeper', 'working', { taskText: text.slice(0, 80) });
 
+    this._abortController = new AbortController();
+
     try {
-      const reply = await this.plugin.sendMessage(
-        this.history.map((h) => ({ role: h.role, content: h.content }))
+      const reply = await this.plugin.sendStreamMessage(
+        this.history.map((h) => ({ role: h.role, content: h.content })),
+        (partial) => {
+          accumulated = partial;
+          bodyEl.setText(accumulated + '▌');
+          this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+        },
+        this._abortController.signal
       );
-      thinkingEl.remove();
-      this.renderMessage('assistant', reply);
+      accumulated = reply;
+      this.plugin.renderMarkdown(bodyEl, reply);
+      this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
       this.history.push({ role: 'assistant', content: reply });
       village.setStatus('innkeeper', 'finished', { taskText: 'Answered a question' });
       village.say('innkeeper', reply.slice(0, 90));
     } catch (err) {
-      thinkingEl.remove();
-      this.renderMessage('assistant', `⚠️ Error: ${err.message}`);
-      new Notice(`AI Chat error: ${err.message}`);
-      village.setStatus('innkeeper', 'error', { taskText: err.message.slice(0, 80) });
-      village.say('innkeeper', `Ink spilled — ${err.message.slice(0, 70)}`);
+      if (err.name === 'AbortError') {
+        bodyEl.setText(accumulated + '\n\n*(stopped)*');
+        if (accumulated) {
+          this.history.push({ role: 'assistant', content: accumulated });
+        }
+        village.setStatus('innkeeper', 'idle', { taskText: 'Stopped' });
+      } else {
+        bodyEl.setText(`⚠️ Error: ${err.message}`);
+        new Notice(`AI Chat error: ${err.message}`);
+        village.setStatus('innkeeper', 'error', { taskText: err.message.slice(0, 80) });
+        village.say('innkeeper', `Ink spilled — ${err.message.slice(0, 70)}`);
+      }
     } finally {
       this.sendBtn.disabled = false;
+      this.stopBtn.disabled = true;
+      this._abortController = null;
     }
   }
 
@@ -126,12 +158,21 @@ class AIChatView extends ItemView {
       text: role === 'user' ? 'You' : this.plugin.getActiveProvider()?.name || 'AI',
     });
     const bodyEl = msgEl.createDiv({ cls: 'ai-chat-body' });
-    bodyEl.setText(text);
+    if (role === 'assistant' && text) {
+      this.plugin.renderMarkdown(bodyEl, text);
+    } else {
+      bodyEl.setText(text);
+    }
     this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
     return msgEl;
   }
 
-  async onClose() {}
+  async onClose() {
+    if (this._abortController) {
+      this._abortController.abort();
+      this._abortController = null;
+    }
+  }
 }
 
 module.exports = { AIChatView };

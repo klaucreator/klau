@@ -18,15 +18,11 @@ function safeJson(res) {
   }
 }
 
-// See anthropic.js's MAX_TOKENS comment: 2048 was too tight for agent turns that combine a
-// tool call with a substantial written response. This file previously sent no max_tokens at
-// all, leaving it to each provider's own (often small) default — set it explicitly instead.
-const MAX_TOKENS = 8192;
-
 async function sendToOpenAICompatible(messages, provider, systemText) {
+  const maxTokens = provider.maxTokens || 8192;
   const body = {
     model: provider.model,
-    max_tokens: MAX_TOKENS,
+    max_tokens: maxTokens,
     messages: systemText ? [{ role: 'system', content: systemText }, ...messages] : messages,
   };
 
@@ -58,21 +54,26 @@ async function sendToOpenAICompatible(messages, provider, systemText) {
   const parsed = safeJson(res);
   if (parsed.choices?.[0]?.finish_reason === 'length') {
     throw new Error(
-      `Response was cut off after hitting the ${MAX_TOKENS}-token limit before finishing. ` +
+      `Response was cut off after hitting the ${maxTokens}-token limit before finishing. ` +
       `Try a smaller/simpler step, or ask the agent to keep its final summary shorter.`
     );
   }
   return parsed.choices?.[0]?.message?.content || '';
 }
 
-// See anthropic.js for notes on why streaming uses raw fetch instead of requestUrl.
-async function streamOpenAICompatible(messages, provider, systemText, onDelta) {
+async function streamOpenAICompatible(messages, provider, systemText, onDelta, signal) {
+  const maxTokens = provider.maxTokens || 8192;
   const body = {
     model: provider.model,
-    max_tokens: MAX_TOKENS,
+    max_tokens: maxTokens,
     stream: true,
     messages: systemText ? [{ role: 'system', content: systemText }, ...messages] : messages,
   };
+
+  const timeout = provider.timeoutMs || 120000;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const combinedSignal = signal ? combineSignals(signal, controller.signal) : controller.signal;
 
   const res = await fetch(`${provider.baseUrl.replace(/\/$/, '')}/chat/completions`, {
     method: 'POST',
@@ -81,7 +82,9 @@ async function streamOpenAICompatible(messages, provider, systemText, onDelta) {
       authorization: `Bearer ${provider.apiKey}`,
     },
     body: JSON.stringify(body),
+    signal: combinedSignal,
   });
+  clearTimeout(timeoutId);
 
   if (!res.ok || !res.body) {
     let errMsg = `HTTP ${res.status}`;
@@ -105,11 +108,20 @@ async function streamOpenAICompatible(messages, provider, systemText, onDelta) {
 
   if (truncated) {
     throw new Error(
-      `Response was cut off after hitting the ${MAX_TOKENS}-token limit before finishing. ` +
+      `Response was cut off after hitting the ${maxTokens}-token limit before finishing. ` +
       `Try a smaller/simpler step, or ask the agent to keep its final summary shorter.`
     );
   }
   return text;
+}
+
+function combineSignals(s1, s2) {
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  s1.addEventListener('abort', onAbort);
+  s2.addEventListener('abort', onAbort);
+  if (s1.aborted || s2.aborted) controller.abort();
+  return controller.signal;
 }
 
 module.exports = { sendToOpenAICompatible, streamOpenAICompatible };

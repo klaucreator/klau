@@ -6,6 +6,7 @@ const { VILLAGE_BUILDINGS, VILLAGE_PROFESSIONS, VILLAGE_SMALLTALK } = require('.
 
 const VILLAGE_STATUS_PRIORITY = ['error', 'walking', 'working', 'meeting', 'reviewing', 'waiting', 'finished', 'idle'];
 const VILLAGE_TICK_MS = 200;
+const MOBILE_TICK_MS = 500;
 
 function villageMoodIcon(status, subStatus, extra) {
   if (status === 'error') return '⚠️';
@@ -53,6 +54,10 @@ class VillageView extends ItemView {
     this.chatCooldown = new Map();
     this.prevPositions = new Map();
     this.diagnosticsOpen = new Set();
+    this.mobileMode = this.plugin.settings?.mobileMode || false;
+    this.touchStart = null;
+    this.scenePan = { x: 0, y: 0 };
+    this.isPanning = false;
   }
 
   getViewType() {
@@ -85,7 +90,21 @@ class VillageView extends ItemView {
       this.applyNightMode();
     });
 
+    this.mobileBtn = toolbar.createEl('button', { cls: 'ai-village-mobile-toggle', text: this.mobileMode ? '📱 Mobile' : '🖥️ Desktop' });
+    this.mobileBtn.addEventListener('click', async () => {
+      this.mobileMode = !this.mobileMode;
+      this.mobileBtn.setText(this.mobileMode ? '📱 Mobile' : '🖥️ Desktop');
+      this.applyMobileMode();
+      this.restartGameLoop();
+      // Persist to settings
+      if (this.plugin.settings) {
+        this.plugin.settings.mobileMode = this.mobileMode;
+        await this.plugin.saveSettings();
+      }
+    });
+
     const sceneWrap = container.createDiv({ cls: 'ai-village-scene-wrap' });
+    this.sceneWrapEl = sceneWrap;
     this.sceneEl = sceneWrap.createDiv({ cls: 'ai-village-scene' });
     if (this.plugin.villageMapUrl) {
       this.sceneEl.style.backgroundImage = `url("${this.plugin.villageMapUrl}")`;
@@ -151,11 +170,69 @@ class VillageView extends ItemView {
     this.unsub = this.plugin.village.subscribe(() => this.sync());
     this.wanderInterval = window.setInterval(() => this.wanderTick(), 4200);
     this.tickInterval = window.setInterval(() => this.applyNightMode(), 60000);
-    this.gameLoop = window.setInterval(() => this.gameTick(), VILLAGE_TICK_MS);
+    this.restartGameLoop();
 
     this.applyNightMode();
+    this.applyMobileMode();
+    this.setupTouchPanning();
     this.wanderTick();
     this.sync();
+  }
+
+  restartGameLoop() {
+    if (this.gameLoop) window.clearInterval(this.gameLoop);
+    const tickMs = this.mobileMode ? MOBILE_TICK_MS : VILLAGE_TICK_MS;
+    this.gameLoop = window.setInterval(() => this.gameTick(), tickMs);
+  }
+
+  applyMobileMode() {
+    if (!this.sceneEl) return;
+    this.sceneEl.toggleClass('mobile-mode', this.mobileMode);
+    // Disable heavy visual effects on mobile
+    const buildings = this.sceneEl.querySelectorAll('.ai-village-building-glow, .ai-village-building-smoke');
+    buildings.forEach(el => el.style.display = this.mobileMode ? 'none' : '');
+    // Reduce sprite layer complexity
+    this.spriteLayerEl.style.willChange = this.mobileMode ? 'auto' : 'transform';
+  }
+
+  setupTouchPanning() {
+    if (!this.sceneWrapEl) return;
+    this.sceneWrapEl.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 1) {
+        this.touchStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        this.isPanning = false;
+      }
+    }, { passive: true });
+
+    this.sceneWrapEl.addEventListener('touchmove', (e) => {
+      if (!this.touchStart || e.touches.length !== 1) return;
+      const dx = e.touches[0].clientX - this.touchStart.x;
+      const dy = e.touches[0].clientY - this.touchStart.y;
+      if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+        this.isPanning = true;
+        this.scenePan.x += dx * 0.5;
+        this.scenePan.y += dy * 0.5;
+        // Clamp panning
+        const maxPan = 200;
+        this.scenePan.x = Math.max(-maxPan, Math.min(maxPan, this.scenePan.x));
+        this.scenePan.y = Math.max(-maxPan, Math.min(maxPan, this.scenePan.y));
+        this.spriteLayerEl.style.transform = `translate(${this.scenePan.x}px, ${this.scenePan.y}px)`;
+      }
+    }, { passive: true });
+
+    this.sceneWrapEl.addEventListener('touchend', () => {
+      this.touchStart = null;
+      // Reset pan after a delay
+      setTimeout(() => {
+        if (!this.isPanning) return;
+        this.isPanning = false;
+        this.spriteLayerEl.style.transition = 'transform 0.3s ease-out';
+        this.spriteLayerEl.style.transform = 'translate(0, 0)';
+        setTimeout(() => {
+          this.spriteLayerEl.style.transition = '';
+        }, 300);
+      }, 1000);
+    });
   }
 
   async onClose() {
@@ -520,9 +597,49 @@ class VillageView extends ItemView {
     }
 
     el.createDiv({ cls: 'ai-village-villager-mood', text: '🙂' });
-    el.createDiv({ cls: 'ai-village-villager-bubble' });
+    const bubbleEl = el.createDiv({ cls: 'ai-village-villager-bubble' });
+    bubbleEl.style.display = 'none';
     el.createDiv({ cls: 'ai-village-villager-tag', text: v.name });
     el.createDiv({ cls: 'ai-village-villager-activity' });
+
+    // Tap to show speech bubble on mobile
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const v = this.plugin.village.villagers.get(key);
+      if (v && v.bubble && v.bubble.text) {
+        bubbleEl.setText(`${v.bubble.icon || ''} ${v.bubble.text}`.trim());
+        bubbleEl.style.display = 'block';
+        el.addClass('has-bubble');
+        // Auto-hide after 3 seconds
+        setTimeout(() => {
+          bubbleEl.style.display = 'none';
+          el.removeClass('has-bubble');
+        }, 3000);
+      }
+    }, { passive: true });
+
+    // Touch support for mobile - long press to show bubble
+    let touchTimer = null;
+    el.addEventListener('touchstart', (e) => {
+      touchTimer = setTimeout(() => {
+        const v = this.plugin.village.villagers.get(key);
+        if (v && v.bubble && v.bubble.text) {
+          bubbleEl.setText(`${v.bubble.icon || ''} ${v.bubble.text}`.trim());
+          bubbleEl.style.display = 'block';
+          el.addClass('has-bubble');
+          setTimeout(() => {
+            bubbleEl.style.display = 'none';
+            el.removeClass('has-bubble');
+          }, 3000);
+        }
+      }, 500);
+    }, { passive: true });
+    el.addEventListener('touchend', () => {
+      if (touchTimer) clearTimeout(touchTimer);
+    }, { passive: true });
+    el.addEventListener('touchmove', () => {
+      if (touchTimer) clearTimeout(touchTimer);
+    }, { passive: true });
 
     const anchor = prof ? VILLAGE_BUILDINGS[prof.building] : { x: 50, y: 50 };
     const pos = prof ? this.jitter(anchor, key) : { x: 20 + Math.random() * 60, y: 20 + Math.random() * 60 };

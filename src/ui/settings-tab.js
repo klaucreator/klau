@@ -62,6 +62,31 @@ class AIChatSettingTab extends PluginSettingTab {
       });
     });
 
+    new Setting(containerEl)
+      .setName('Notification sound')
+      .setDesc('Play a chime when an agent finishes a task or needs approval. On mobile, tap "Test Sound" first to unlock audio.')
+      .addButton((btn) => {
+        btn.setButtonText('🔊 Test Sound').onClick(() => {
+          this.plugin.playNotificationSound();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName('Mobile mode')
+      .setDesc('Reduces animations and lowers refresh rate for better battery life on Android/iOS.')
+      .addToggle((toggle) => {
+        toggle.setValue(this.plugin.settings.mobileMode || false);
+        toggle.onChange(async (value) => {
+          this.plugin.settings.mobileMode = value;
+          await this.plugin.saveSettings();
+          if (this.plugin.villageView) {
+            this.plugin.villageView.mobileMode = value;
+            this.plugin.villageView.applyMobileMode();
+            this.plugin.villageView.restartGameLoop();
+          }
+        });
+      });
+
     containerEl.createEl('h3', { text: 'AI Agent' });
     containerEl.createEl('p', {
       text:
@@ -275,6 +300,34 @@ class AIChatSettingTab extends PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
+
+    new Setting(box)
+      .setName('Max output tokens')
+      .setDesc('Maximum tokens per response. Default: 8192.')
+      .addText((text) => {
+        text.setValue(String(provider.maxTokens || 8192));
+        text.onChange(async (value) => {
+          const n = parseInt(value, 10);
+          if (!isNaN(n) && n > 0) {
+            provider.maxTokens = n;
+            await this.plugin.saveSettings();
+          }
+        });
+      });
+
+    new Setting(box)
+      .setName('Request timeout (ms)')
+      .setDesc('Timeout in milliseconds. Default: 120000 (2 min).')
+      .addText((text) => {
+        text.setValue(String(provider.timeoutMs || 120000));
+        text.onChange(async (value) => {
+          const n = parseInt(value, 10);
+          if (!isNaN(n) && n > 0) {
+            provider.timeoutMs = n;
+            await this.plugin.saveSettings();
+          }
+        });
+      });
 
     if (this.plugin.settings.providers.length > 1) {
       new Setting(box).addButton((btn) => {

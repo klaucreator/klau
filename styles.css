@@ -80,8 +80,19 @@
   font-family: inherit;
 }
 
+.ai-chat-btn-row {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
 .ai-chat-send-btn {
   align-self: flex-end;
+}
+
+.ai-chat-stop-btn {
+  align-self: flex-end;
+  font-size: 12px;
 }
 
 .ai-chat-provider-box {
@@ -1067,4 +1078,249 @@
 
 .ai-agent-btn-row .ai-agent-btn-row button {
   margin: 0 2px;
+}
+
+/* --- Mobile Mode --- */
+.ai-village-scene.mobile-mode .ai-village-building-glow,
+.ai-village-scene.mobile-mode .ai-village-building-smoke {
+  display: none !important;
+}
+.ai-village-scene.mobile-mode .ai-village-sprite-layer {
+  will-change: auto;
+}
+
+/* ======================== Agent Status Bar (Mobile-first) ======================== */
+
+.ai-agent-status-bar {
+  display: none;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  background: var(--background-primary);
+  border-top: 1px solid var(--background-modifier-border);
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.15);
+  font-family: var(--font-text);
+}
+
+.ai-agent-status-bar.visible {
+  display: block;
+}
+
+.ai-agent-status-bar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  min-height: 36px;
+}
+
+.ai-agent-status-bar-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.ai-agent-status-bar-toggle {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--background-modifier-hover);
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-normal);
+  cursor: pointer;
+}
+
+.ai-agent-status-bar-toggle:hover {
+  background: var(--interactive-accent-hover);
+}
+
+.ai-agent-status-bar-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  max-height: 60px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ai-agent-status-bar-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 16px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  font-size: 11px;
+  color: var(--text-normal);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ai-agent-status-bar-agent:hover,
+.ai-agent-status-bar-agent:active {
+  background: var(--background-modifier-hover);
+  transform: scale(1.02);
+}
+
+.ai-agent-status-bar-agent.needs-attention {
+  background: rgba(220, 38, 38, 0.15);
+  border-color: rgba(220, 38, 38, 0.5);
+  animation: ai-agent-status-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes ai-agent-status-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(220, 38, 38, 0); }
+}
+
+.ai-agent-status-bar-idle {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.ai-agent-status-bar-expanded {
+  display: none;
+  max-height: 200px;
+  overflow-y: auto;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.ai-agent-status-bar.expanded .ai-agent-status-bar-expanded {
+  display: block;
+}
+
+.ai-agent-status-bar-expanded-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  cursor: pointer;
+  transition: background 0.15s ease;
+  user-select: none;
+}
+
+.ai-agent-status-bar-expanded-item:hover,
+.ai-agent-status-bar-expanded-item:active {
+  background: var(--background-modifier-hover);
+}
+
+.ai-agent-status-bar-expanded-item.needs-attention {
+  background: rgba(220, 38, 38, 0.08);
+}
+
+.ai-agent-status-bar-expanded-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-agent-status-bar-expanded-emoji {
+  font-size: 16px;
+}
+
+.ai-agent-status-bar-expanded-name {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text-normal);
+}
+
+.ai-agent-status-bar-expanded-status {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.ai-agent-status-bar-expanded-task {
+  font-size: 10px;
+  color: var(--text-muted);
+  padding-left: 24px;
+}
+
+.ai-agent-status-bar-toast {
+  position: fixed;
+  bottom: 80px;
+  left: 12px;
+  right: 12px;
+  max-width: 360px;
+  margin: 0 auto;
+  z-index: 1001;
+  animation: ai-agent-toast-in 0.3s ease-out;
+}
+
+@keyframes ai-agent-toast-in {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.ai-agent-status-bar-toast-content {
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+
+.ai-agent-status-bar-toast-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.ai-agent-status-bar-toast-close {
+  background: none;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  color: var(--text-muted);
+  line-height: 1;
+  padding: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+}
+
+.ai-agent-status-bar-toast-close:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.ai-agent-status-bar-toast-body {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--text-normal);
+  line-height: 1.6;
+}
+
+.ai-agent-status-bar-toast-body div {
+  margin-bottom: 6px;
+}
+
+.ai-agent-status-bar-toast-body strong {
+  color: var(--text-accent);
+}
+
+/* Show status bar on mobile by default */
+@media (max-width: 600px) {
+  .ai-agent-status-bar {
+    display: block;
+  }
 }

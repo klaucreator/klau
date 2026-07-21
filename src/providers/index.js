@@ -30,11 +30,11 @@ async function sendMessage(messages, provider, systemText) {
 
 // Streaming request; used by the Agent. onDelta(text) is called repeatedly with the growing
 // raw response text as it streams in.
-async function streamMessage(messages, provider, systemText, onDelta) {
+async function streamMessage(messages, provider, systemText, onDelta, signal) {
   assertUsableProvider(provider);
   return provider.type === 'anthropic'
-    ? await streamAnthropic(messages, provider, systemText, onDelta)
-    : await streamOpenAICompatible(messages, provider, systemText, onDelta);
+    ? await streamAnthropic(messages, provider, systemText, onDelta, signal)
+    : await streamOpenAICompatible(messages, provider, systemText, onDelta, signal);
 }
 
 module.exports = {

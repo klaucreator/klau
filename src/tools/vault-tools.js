@@ -51,6 +51,20 @@ async function runAgentTool(app, tool, args) {
       return parts.join('\n\n');
     }
 
+    case 'read_canvas': {
+      const cPath = String(args.path || '');
+      if (!cPath) throw new Error('Missing path.');
+      const cFile = app.vault.getAbstractFileByPath(cPath);
+      if (!cFile) throw new Error(`Canvas not found: ${cPath}`);
+      if (!cPath.endsWith('.canvas')) throw new Error('Not a .canvas file.');
+      const cContent = await app.vault.cachedRead(cFile);
+      let cData;
+      try { cData = JSON.parse(cContent); } catch (e) { throw new Error(`Invalid canvas JSON: ${e.message}`); }
+      const cNodes = (cData.nodes || []).map((n) => `- "${n.text || '(empty)'}" at (${n.x}, ${n.y})${n.file ? ` → file: ${n.file}` : ''}`) .join('\n');
+      const cEdges = (cData.edges || []).map((e) => `  ${e.fromNode} → ${e.toNode} ${e.label ? `("${e.label}")` : ''}`) .join('\n');
+      return `Canvas: ${cPath}\nNodes (${(cData.nodes || []).length}):\n${cNodes || '  (none)'}\nEdges:\n${cEdges || '  (none)'}`;
+    }
+
     case 'get_note_metadata': {
       const path = String(args.path || '');
       if (!path) throw new Error('Missing path.');
@@ -81,12 +95,29 @@ async function runAgentTool(app, tool, args) {
       const matches = [];
       for (const file of files) {
         if (matches.length >= 20) break;
-        const content = await app.vault.cachedRead(file);
-        const idx = content.toLowerCase().indexOf(query);
-        if (idx !== -1) {
-          const start = Math.max(0, idx - 60);
-          const snippet = content.slice(start, idx + query.length + 60).replace(/\s+/g, ' ');
+        const cache = app.metadataCache.getFileCache(file);
+        const tags = cache?.tags?.map((t) => t.tag).join(' ') || '';
+        const headings = cache?.headings?.map((h) => h.heading).join(' ') || '';
+        const searchSpace = tags + ' ' + headings;
+        if (searchSpace.toLowerCase().includes(query)) {
+          const content = await app.vault.cachedRead(file);
+          const idx = content.toLowerCase().indexOf(query);
+          const start = Math.max(0, (idx !== -1 ? idx : 0) - 60);
+          const snippet = content.slice(start, Math.min(content.length, (idx !== -1 ? idx : 0) + query.length + 60)).replace(/\s+/g, ' ');
           matches.push(`${file.path}: ...${snippet}...`);
+        }
+      }
+      if (matches.length < 20) {
+        for (const file of files) {
+          if (matches.length >= 20) break;
+          if (matches.some((m) => m.startsWith(file.path))) continue;
+          const content = await app.vault.cachedRead(file);
+          const idx = content.toLowerCase().indexOf(query);
+          if (idx !== -1) {
+            const start = Math.max(0, idx - 60);
+            const snippet = content.slice(start, idx + query.length + 60).replace(/\s+/g, ' ');
+            matches.push(`${file.path}: ...${snippet}...`);
+          }
         }
       }
       return matches.length === 0 ? 'No matches found.' : matches.join('\n');

@@ -14,6 +14,8 @@ const DEFAULT_SETTINGS = {
       apiKey: '',
       baseUrl: 'https://api.anthropic.com',
       model: 'claude-sonnet-4-6',
+      maxTokens: 8192,
+      timeoutMs: 120000,
     },
     {
       id: 'custom-openai',
@@ -22,6 +24,8 @@ const DEFAULT_SETTINGS = {
       apiKey: '',
       baseUrl: 'https://api.openai.com/v1',
       model: 'gpt-4o',
+      maxTokens: 8192,
+      timeoutMs: 120000,
     },
   ],
   activeProviderId: 'claude',
@@ -31,6 +35,7 @@ const DEFAULT_SETTINGS = {
   agentMaxSteps: 20,
   agentAutoApprove: false,
   agentTeam: [],
+  villageState: null,
 };
 
 // The plain chat sidebar has no tool-calling loop at all (unlike the Agent) — it just sends

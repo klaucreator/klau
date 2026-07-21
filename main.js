@@ -24,7 +24,9 @@ var require_constants = __commonJS({
           type: "anthropic",
           apiKey: "",
           baseUrl: "https://api.anthropic.com",
-          model: "claude-sonnet-4-6"
+          model: "claude-sonnet-4-6",
+          maxTokens: 8192,
+          timeoutMs: 12e4
         },
         {
           id: "custom-openai",
@@ -32,7 +34,9 @@ var require_constants = __commonJS({
           type: "openai-compatible",
           apiKey: "",
           baseUrl: "https://api.openai.com/v1",
-          model: "gpt-4o"
+          model: "gpt-4o",
+          maxTokens: 8192,
+          timeoutMs: 12e4
         }
       ],
       activeProviderId: "claude",
@@ -41,7 +45,8 @@ var require_constants = __commonJS({
       organizeMaxFiles: 150,
       agentMaxSteps: 20,
       agentAutoApprove: false,
-      agentTeam: []
+      agentTeam: [],
+      villageState: null
     };
     var CHAT_NO_TOOLS_SYSTEM_NOTE2 = "You are chatting inside a note-taking app's sidebar panel. You do not have any tools, plugins, file access, or live internet/web-search access in this conversation \u2014 you can only use your own built-in knowledge. Do not simulate, describe, or emit any tool-call-style syntax or placeholder function calls. If a question needs real-time or web information you don't have, just say so plainly instead of pretending to look it up.";
     module2.exports = {
@@ -107,11 +112,11 @@ var require_anthropic = __commonJS({
         );
       }
     }
-    var MAX_TOKENS = 8192;
     async function sendToAnthropic(messages, provider, systemText) {
+      const maxTokens = provider.maxTokens || 8192;
       const body = {
         model: provider.model,
-        max_tokens: MAX_TOKENS,
+        max_tokens: maxTokens,
         messages: messages.map((m) => ({
           role: m.role === "assistant" ? "assistant" : "user",
           content: m.content
@@ -145,16 +150,17 @@ var require_anthropic = __commonJS({
       const parsed = safeJson(res);
       if (parsed.stop_reason === "max_tokens") {
         throw new Error(
-          `Response was cut off after hitting the ${MAX_TOKENS}-token limit before finishing. Try a smaller/simpler step, or ask the agent to keep its final summary shorter.`
+          `Response was cut off after hitting the ${maxTokens}-token limit before finishing. Try a smaller/simpler step, or ask the agent to keep its final summary shorter.`
         );
       }
       const content = parsed.content || [];
       return content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
     }
-    async function streamAnthropic(messages, provider, systemText, onDelta) {
+    async function streamAnthropic(messages, provider, systemText, onDelta, signal) {
+      const maxTokens = provider.maxTokens || 8192;
       const body = {
         model: provider.model,
-        max_tokens: MAX_TOKENS,
+        max_tokens: maxTokens,
         stream: true,
         messages: messages.map((m) => ({
           role: m.role === "assistant" ? "assistant" : "user",
@@ -162,6 +168,10 @@ var require_anthropic = __commonJS({
         }))
       };
       if (systemText) body.system = systemText;
+      const timeout = provider.timeoutMs || 12e4;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeout);
+      const combinedSignal = signal ? combineSignals(signal, controller.signal) : controller.signal;
       const res = await fetch(`${provider.baseUrl.replace(/\/$/, "")}/v1/messages`, {
         method: "POST",
         headers: {
@@ -170,8 +180,10 @@ var require_anthropic = __commonJS({
           "anthropic-version": "2023-06-01",
           "anthropic-dangerous-direct-browser-access": "true"
         },
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
+        signal: combinedSignal
       });
+      clearTimeout(timeoutId);
       if (!res.ok || !res.body) {
         let errMsg = `HTTP ${res.status}`;
         try {
@@ -195,10 +207,18 @@ var require_anthropic = __commonJS({
       }, onDelta);
       if (truncated) {
         throw new Error(
-          `Response was cut off after hitting the ${MAX_TOKENS}-token limit before finishing. Try a smaller/simpler step, or ask the agent to keep its final summary shorter.`
+          `Response was cut off after hitting the ${maxTokens}-token limit before finishing. Try a smaller/simpler step, or ask the agent to keep its final summary shorter.`
         );
       }
       return text;
+    }
+    function combineSignals(s1, s2) {
+      const controller = new AbortController();
+      const onAbort = () => controller.abort();
+      s1.addEventListener("abort", onAbort);
+      s2.addEventListener("abort", onAbort);
+      if (s1.aborted || s2.aborted) controller.abort();
+      return controller.signal;
     }
     module2.exports = { sendToAnthropic, streamAnthropic };
   }
@@ -220,11 +240,11 @@ var require_openai_compatible = __commonJS({
         );
       }
     }
-    var MAX_TOKENS = 8192;
     async function sendToOpenAICompatible(messages, provider, systemText) {
+      const maxTokens = provider.maxTokens || 8192;
       const body = {
         model: provider.model,
-        max_tokens: MAX_TOKENS,
+        max_tokens: maxTokens,
         messages: systemText ? [{ role: "system", content: systemText }, ...messages] : messages
       };
       const res = await requestUrl({
@@ -251,26 +271,33 @@ var require_openai_compatible = __commonJS({
       const parsed = safeJson(res);
       if (parsed.choices?.[0]?.finish_reason === "length") {
         throw new Error(
-          `Response was cut off after hitting the ${MAX_TOKENS}-token limit before finishing. Try a smaller/simpler step, or ask the agent to keep its final summary shorter.`
+          `Response was cut off after hitting the ${maxTokens}-token limit before finishing. Try a smaller/simpler step, or ask the agent to keep its final summary shorter.`
         );
       }
       return parsed.choices?.[0]?.message?.content || "";
     }
-    async function streamOpenAICompatible(messages, provider, systemText, onDelta) {
+    async function streamOpenAICompatible(messages, provider, systemText, onDelta, signal) {
+      const maxTokens = provider.maxTokens || 8192;
       const body = {
         model: provider.model,
-        max_tokens: MAX_TOKENS,
+        max_tokens: maxTokens,
         stream: true,
         messages: systemText ? [{ role: "system", content: systemText }, ...messages] : messages
       };
+      const timeout = provider.timeoutMs || 12e4;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeout);
+      const combinedSignal = signal ? combineSignals(signal, controller.signal) : controller.signal;
       const res = await fetch(`${provider.baseUrl.replace(/\/$/, "")}/chat/completions`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${provider.apiKey}`
         },
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
+        signal: combinedSignal
       });
+      clearTimeout(timeoutId);
       if (!res.ok || !res.body) {
         let errMsg = `HTTP ${res.status}`;
         try {
@@ -290,10 +317,18 @@ var require_openai_compatible = __commonJS({
       }, onDelta);
       if (truncated) {
         throw new Error(
-          `Response was cut off after hitting the ${MAX_TOKENS}-token limit before finishing. Try a smaller/simpler step, or ask the agent to keep its final summary shorter.`
+          `Response was cut off after hitting the ${maxTokens}-token limit before finishing. Try a smaller/simpler step, or ask the agent to keep its final summary shorter.`
         );
       }
       return text;
+    }
+    function combineSignals(s1, s2) {
+      const controller = new AbortController();
+      const onAbort = () => controller.abort();
+      s1.addEventListener("abort", onAbort);
+      s2.addEventListener("abort", onAbort);
+      if (s1.aborted || s2.aborted) controller.abort();
+      return controller.signal;
     }
     module2.exports = { sendToOpenAICompatible, streamOpenAICompatible };
   }
@@ -321,9 +356,9 @@ var require_providers = __commonJS({
       }
       return await sendToOpenAICompatible(messages, provider, systemText);
     }
-    async function streamMessage(messages, provider, systemText, onDelta) {
+    async function streamMessage(messages, provider, systemText, onDelta, signal) {
       assertUsableProvider(provider);
-      return provider.type === "anthropic" ? await streamAnthropic(messages, provider, systemText, onDelta) : await streamOpenAICompatible(messages, provider, systemText, onDelta);
+      return provider.type === "anthropic" ? await streamAnthropic(messages, provider, systemText, onDelta, signal) : await streamOpenAICompatible(messages, provider, systemText, onDelta, signal);
     }
     module2.exports = {
       resolveActiveProvider,
@@ -849,6 +884,27 @@ ${snippet}${content.length > 1500 ? "\n...(truncated)" : ""}`);
           }
           return parts.join("\n\n");
         }
+        case "read_canvas": {
+          const cPath = String(args.path || "");
+          if (!cPath) throw new Error("Missing path.");
+          const cFile = app.vault.getAbstractFileByPath(cPath);
+          if (!cFile) throw new Error(`Canvas not found: ${cPath}`);
+          if (!cPath.endsWith(".canvas")) throw new Error("Not a .canvas file.");
+          const cContent = await app.vault.cachedRead(cFile);
+          let cData;
+          try {
+            cData = JSON.parse(cContent);
+          } catch (e) {
+            throw new Error(`Invalid canvas JSON: ${e.message}`);
+          }
+          const cNodes = (cData.nodes || []).map((n) => `- "${n.text || "(empty)"}" at (${n.x}, ${n.y})${n.file ? ` \u2192 file: ${n.file}` : ""}`).join("\n");
+          const cEdges = (cData.edges || []).map((e) => `  ${e.fromNode} \u2192 ${e.toNode} ${e.label ? `("${e.label}")` : ""}`).join("\n");
+          return `Canvas: ${cPath}
+Nodes (${(cData.nodes || []).length}):
+${cNodes || "  (none)"}
+Edges:
+${cEdges || "  (none)"}`;
+        }
         case "get_note_metadata": {
           const path = String(args.path || "");
           if (!path) throw new Error("Missing path.");
@@ -878,12 +934,29 @@ ${snippet}${content.length > 1500 ? "\n...(truncated)" : ""}`);
           const matches = [];
           for (const file of files) {
             if (matches.length >= 20) break;
-            const content = await app.vault.cachedRead(file);
-            const idx = content.toLowerCase().indexOf(query);
-            if (idx !== -1) {
-              const start = Math.max(0, idx - 60);
-              const snippet = content.slice(start, idx + query.length + 60).replace(/\s+/g, " ");
+            const cache = app.metadataCache.getFileCache(file);
+            const tags = cache?.tags?.map((t) => t.tag).join(" ") || "";
+            const headings = cache?.headings?.map((h) => h.heading).join(" ") || "";
+            const searchSpace = tags + " " + headings;
+            if (searchSpace.toLowerCase().includes(query)) {
+              const content = await app.vault.cachedRead(file);
+              const idx = content.toLowerCase().indexOf(query);
+              const start = Math.max(0, (idx !== -1 ? idx : 0) - 60);
+              const snippet = content.slice(start, Math.min(content.length, (idx !== -1 ? idx : 0) + query.length + 60)).replace(/\s+/g, " ");
               matches.push(`${file.path}: ...${snippet}...`);
+            }
+          }
+          if (matches.length < 20) {
+            for (const file of files) {
+              if (matches.length >= 20) break;
+              if (matches.some((m) => m.startsWith(file.path))) continue;
+              const content = await app.vault.cachedRead(file);
+              const idx = content.toLowerCase().indexOf(query);
+              if (idx !== -1) {
+                const start = Math.max(0, idx - 60);
+                const snippet = content.slice(start, idx + query.length + 60).replace(/\s+/g, " ");
+                matches.push(`${file.path}: ...${snippet}...`);
+              }
             }
           }
           return matches.length === 0 ? "No matches found." : matches.join("\n");
@@ -1038,23 +1111,23 @@ var require_village_roster = __commonJS({
   "src/village/village-roster.js"(exports2, module2) {
     "use strict";
     var VILLAGE_BUILDINGS = {
-      townhall: { label: "Town Hall", x: 48, y: 41 },
-      library: { label: "Library", x: 23, y: 24 },
-      castle: { label: "Castle", x: 48, y: 19 },
-      observatory: { label: "Observatory", x: 69, y: 17 },
-      magetower: { label: "Mage Tower", x: 80, y: 30 },
-      blacksmith: { label: "Blacksmith", x: 22, y: 34 },
-      market: { label: "Market", x: 72, y: 39 },
-      merchant: { label: "Merchant", x: 87, y: 47 },
-      carpenter: { label: "Carpenter", x: 11, y: 50 },
-      workshop: { label: "Workshop", x: 28, y: 52 },
-      plaza: { label: "Grand Plaza", x: 49, y: 57 },
-      farm: { label: "Farm", x: 24, y: 64 },
-      stable: { label: "Stable", x: 70, y: 65 },
-      windmill: { label: "Windmill", x: 51, y: 77 },
-      harbor: { label: "Harbor", x: 21, y: 86 },
-      lighthouse: { label: "Lighthouse", x: 52, y: 92 },
-      shipyard: { label: "Shipyard", x: 76, y: 86 }
+      townhall: { label: "Town Hall", x: 48, y: 41, seats: [{ x: 48, y: 44 }, { x: 45, y: 44 }, { x: 51, y: 44 }] },
+      library: { label: "Library", x: 23, y: 24, seats: [{ x: 23, y: 27 }, { x: 20, y: 27 }] },
+      castle: { label: "Castle", x: 48, y: 19, seats: [{ x: 48, y: 22 }, { x: 45, y: 22 }] },
+      observatory: { label: "Observatory", x: 69, y: 17, seats: [{ x: 69, y: 20 }] },
+      magetower: { label: "Mage Tower", x: 80, y: 30, seats: [{ x: 80, y: 33 }, { x: 77, y: 33 }] },
+      blacksmith: { label: "Blacksmith", x: 22, y: 34, seats: [{ x: 22, y: 37 }, { x: 19, y: 37 }] },
+      market: { label: "Market", x: 72, y: 39, seats: [{ x: 72, y: 42 }] },
+      merchant: { label: "Merchant", x: 87, y: 47, seats: [{ x: 87, y: 50 }, { x: 84, y: 50 }] },
+      carpenter: { label: "Carpenter", x: 11, y: 50, seats: [{ x: 11, y: 53 }] },
+      workshop: { label: "Workshop", x: 28, y: 52, seats: [{ x: 28, y: 55 }, { x: 25, y: 55 }, { x: 31, y: 55 }] },
+      plaza: { label: "Grand Plaza", x: 49, y: 57, seats: [{ x: 49, y: 60 }, { x: 46, y: 60 }, { x: 52, y: 60 }] },
+      farm: { label: "Farm", x: 24, y: 64, seats: [{ x: 24, y: 67 }, { x: 21, y: 67 }] },
+      stable: { label: "Stable", x: 70, y: 65, seats: [{ x: 70, y: 68 }] },
+      windmill: { label: "Windmill", x: 51, y: 77, seats: [{ x: 51, y: 80 }] },
+      harbor: { label: "Harbor", x: 21, y: 86, seats: [{ x: 21, y: 89 }] },
+      lighthouse: { label: "Lighthouse", x: 52, y: 92, seats: [{ x: 52, y: 95 }] },
+      shipyard: { label: "Shipyard", x: 76, y: 86, seats: [{ x: 76, y: 89 }, { x: 73, y: 89 }] }
     };
     var VILLAGE_PROFESSIONS = {
       mayor: {
@@ -1261,7 +1334,10 @@ var require_village_roster = __commonJS({
 var require_village_store = __commonJS({
   "src/village/village-store.js"(exports2, module2) {
     "use strict";
-    var { VILLAGE_PROFESSIONS } = require_village_roster();
+    var { VILLAGE_PROFESSIONS, VILLAGE_BUILDINGS } = require_village_roster();
+    var READING_TOOLS = /* @__PURE__ */ new Set(["list_files", "read_note", "read_notes", "get_note_metadata", "search_notes", "search_web"]);
+    var WRITING_TOOLS = /* @__PURE__ */ new Set(["write_note", "append_note", "add_tags", "move_note", "rename_note", "create_folder", "delete_note"]);
+    var BUBBLE_AUTO_FADE = 2500;
     var VillageStore2 = class {
       constructor(plugin) {
         this.plugin = plugin;
@@ -1271,6 +1347,8 @@ var require_village_store = __commonJS({
         this.messengers = [];
         this.listeners = /* @__PURE__ */ new Set();
         this._idleTimers = /* @__PURE__ */ new Map();
+        this._bubbleTimers = /* @__PURE__ */ new Map();
+        this._seatAssignments = /* @__PURE__ */ new Map();
       }
       subscribe(fn) {
         this.listeners.add(fn);
@@ -1284,46 +1362,122 @@ var require_village_store = __commonJS({
           }
         }
       }
+      _nextSeat(buildingKey) {
+        const building = VILLAGE_BUILDINGS[buildingKey];
+        if (!building || !building.seats || building.seats.length === 0) return null;
+        const assigned = this._seatAssignments.get(buildingKey);
+        if (!assigned || assigned.size === 0) return building.seats[0];
+        for (const seat of building.seats) {
+          const key = `${buildingKey}-${seat.x}-${seat.y}`;
+          let taken = false;
+          for (const vkey of assigned) {
+            const v2 = this.villagers.get(vkey);
+            if (v2 && v2.assignedSeat === key) {
+              taken = true;
+              break;
+            }
+          }
+          if (!taken) return seat;
+        }
+        return null;
+      }
       ensure(key, professionKey, name) {
         if (!VILLAGE_PROFESSIONS[professionKey]) professionKey = "mayor";
-        let v = this.villagers.get(key);
-        if (!v) {
-          v = {
+        let v2 = this.villagers.get(key);
+        if (!v2) {
+          const prof = VILLAGE_PROFESSIONS[professionKey];
+          const building = VILLAGE_BUILDINGS[prof.building];
+          const seat = this._nextSeat(prof.building);
+          const seatKey = seat ? `${prof.building}-${seat.x}-${seat.y}` : null;
+          if (seat) {
+            if (!this._seatAssignments.has(prof.building)) this._seatAssignments.set(prof.building, /* @__PURE__ */ new Set());
+            this._seatAssignments.get(prof.building).add(key);
+          }
+          v2 = {
             key,
-            name: name || VILLAGE_PROFESSIONS[professionKey].title,
+            name: name || prof.title,
             professionKey,
             status: "idle",
+            subStatus: null,
             mood: "happy",
             taskText: "",
+            bubble: null,
+            facing: "south",
+            walkTarget: null,
+            wanderPauseUntil: 0,
+            assignedSeat: seatKey,
+            toolHistory: [],
             updatedAt: Date.now()
           };
-          this.villagers.set(key, v);
+          this.villagers.set(key, v2);
         } else if (name) {
-          v.name = name;
+          v2.name = name;
         }
         this._emit();
-        this.log("info", `${v.name} arrived (${VILLAGE_PROFESSIONS[professionKey]?.title || professionKey})`);
-        return v;
+        this.log("info", `${v2.name} arrived (${VILLAGE_PROFESSIONS[professionKey]?.title || professionKey})`);
+        return v2;
+      }
+      removeVillager(key) {
+        const v2 = this.villagers.get(key);
+        if (!v2) return;
+        if (v2.assignedSeat && v2.professionKey) {
+          const prof = VILLAGE_PROFESSIONS[v2.professionKey];
+          if (prof) {
+            const s = this._seatAssignments.get(prof.building);
+            if (s) s.delete(key);
+          }
+        }
+        this.villagers.delete(key);
+        this._emit();
+      }
+      classifyTool(toolName) {
+        if (!toolName) return null;
+        if (READING_TOOLS.has(toolName)) return "reading";
+        if (WRITING_TOOLS.has(toolName)) return "writing";
+        return null;
+      }
+      addToolEntry(key, tool, args, status, resultSummary) {
+        const v2 = this.villagers.get(key);
+        if (!v2) return;
+        v2.toolHistory.push({
+          tool,
+          args: args ? JSON.stringify(args).slice(0, 120) : "",
+          status: status || "done",
+          result: resultSummary ? String(resultSummary).slice(0, 100) : "",
+          timestamp: Date.now()
+        });
+        if (v2.toolHistory.length > 50) v2.toolHistory.shift();
+        this._emit();
       }
       setStatus(key, status, opts) {
         opts = opts || {};
-        const v = this.villagers.get(key);
-        if (!v) return;
+        const v2 = this.villagers.get(key);
+        if (!v2) return;
         clearTimeout(this._idleTimers.get(key));
-        v.status = status;
-        v.taskText = opts.taskText !== void 0 ? opts.taskText : v.taskText;
-        if (opts.mood) v.mood = opts.mood;
-        else if (status === "working") v.mood = "busy";
-        else if (status === "reviewing") v.mood = "thinking";
-        else if (status === "waiting") v.mood = "waiting";
-        else if (status === "error") v.mood = "waiting";
-        else if (status === "finished") v.mood = "happy";
-        else if (status === "idle") v.mood = "happy";
-        v.updatedAt = Date.now();
+        v2.status = status;
+        v2.subStatus = opts.subStatus !== void 0 ? opts.subStatus : null;
+        v2.taskText = opts.taskText !== void 0 ? opts.taskText : v2.taskText;
+        v2.walkTarget = null;
+        if (opts.mood) v2.mood = opts.mood;
+        else if (status === "working") v2.mood = "busy";
+        else if (status === "reviewing") v2.mood = "thinking";
+        else if (status === "waiting") v2.mood = "waiting";
+        else if (status === "error") v2.mood = "waiting";
+        else if (status === "finished") v2.mood = "happy";
+        else if (status === "idle") v2.mood = "happy";
+        v2.updatedAt = Date.now();
+        if (opts.bubble !== void 0) {
+          if (opts.bubble === null) this.clearBubble(key);
+          else this.setBubble(key, opts.bubble.icon, opts.bubble.text, opts.bubble.duration);
+        }
         this._emit();
         const statusLabel = { working: "started working", meeting: "entered a meeting", reviewing: "is reviewing", waiting: "is waiting", finished: "finished", error: "hit an error", idle: "is now idle" }[status] || status;
-        this.log(status === "error" ? "error" : status === "waiting" ? "warn" : "log", `${v.name} ${statusLabel}${opts.taskText ? ": " + opts.taskText : ""}`);
+        this.log(status === "error" ? "error" : status === "waiting" ? "warn" : "log", `${v2.name} ${statusLabel}${opts.taskText ? ": " + opts.taskText : ""}`);
         if (status === "finished" || status === "error") {
+          if (this.plugin && this.plugin.playNotificationSound) {
+            this.plugin.playNotificationSound().catch(() => {
+            });
+          }
           const t = setTimeout(() => {
             if (this.villagers.get(key)?.status === status) {
               this.setStatus(key, "idle", { taskText: "" });
@@ -1332,9 +1486,91 @@ var require_village_store = __commonJS({
           this._idleTimers.set(key, t);
         }
       }
+      setBubble(key, icon, text, durationMs) {
+        const v2 = this.villagers.get(key);
+        if (!v2) return;
+        const expiresAt = durationMs === 0 ? 0 : Date.now() + (durationMs || BUBBLE_AUTO_FADE);
+        v2.bubble = { icon: icon || "", text: text || "", expiresAt };
+        if (durationMs !== 0) {
+          clearTimeout(this._bubbleTimers.get(key));
+          const timer = setTimeout(() => {
+            if (this.villagers.get(key)?.bubble?.expiresAt === expiresAt) {
+              this.clearBubble(key);
+            }
+          }, durationMs || BUBBLE_AUTO_FADE);
+          this._bubbleTimers.set(key, timer);
+        }
+        this._emit();
+      }
+      clearBubble(key) {
+        const v2 = this.villagers.get(key);
+        if (!v2) return;
+        v2.bubble = null;
+        clearTimeout(this._bubbleTimers.get(key));
+        this._bubbleTimers.delete(key);
+        this._emit();
+      }
+      walkTo(key, x, y, onArrival) {
+        const v2 = this.villagers.get(key);
+        if (!v2) return;
+        v2.status = "walking";
+        v2.walkTarget = { x, y, onArrival: typeof onArrival === "function" ? onArrival : null, startedAt: Date.now() };
+        v2.taskText = "";
+        this._emit();
+      }
+      tickAnimations() {
+        const now = Date.now();
+        let changed = false;
+        for (const [key, v2] of this.villagers) {
+          if (v2.status === "walking" && v2.walkTarget) {
+            if (now - v2.walkTarget.startedAt >= 900) {
+              const cb = v2.walkTarget.onArrival;
+              v2.walkTarget = null;
+              v2.status = "idle";
+              changed = true;
+              if (cb) cb(key);
+            }
+          }
+        }
+        if (changed) this._emit();
+      }
+      // --- Sub-agent support ---
+      spawnSubagent(parentKey, name, taskText) {
+        const parent = this.villagers.get(parentKey);
+        if (!parent) return null;
+        const key = `sub-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        const v2 = {
+          key,
+          name: name || "Helper",
+          professionKey: parent.professionKey,
+          status: "working",
+          subStatus: null,
+          mood: "busy",
+          taskText: taskText || "",
+          bubble: null,
+          facing: "south",
+          walkTarget: null,
+          wanderPauseUntil: 0,
+          assignedSeat: null,
+          toolHistory: [],
+          isSubagent: true,
+          parentKey,
+          updatedAt: Date.now()
+        };
+        this.villagers.set(key, v2);
+        this._emit();
+        this.log("info", `${v2.name} spawned as sub-agent for ${parent.name}: ${taskText}`);
+        return v2;
+      }
+      despawnSubagent(key) {
+        const v2 = this.villagers.get(key);
+        if (!v2 || !v2.isSubagent) return;
+        this.villagers.delete(key);
+        this._emit();
+      }
       say(key, text) {
-        const v = this.villagers.get(key);
-        const from = v ? v.name : key;
+        const v2 = this.villagers.get(key);
+        const from = v2 ? v2.name : key;
         const entry = { ts: Date.now(), from, text, key };
         this.feed.push(entry);
         if (this.feed.length > 50) this.feed.shift();
@@ -1360,8 +1596,750 @@ var require_village_store = __commonJS({
         }, 2600);
         return id;
       }
+      toJSON() {
+        const villagers = {};
+        for (const [key, v2] of this.villagers) {
+          villagers[key] = {
+            name: v2.name,
+            professionKey: v2.professionKey,
+            status: v2.status,
+            subStatus: v2.subStatus,
+            mood: v2.mood,
+            taskText: v2.taskText,
+            facing: v2.facing,
+            assignedSeat: v2.assignedSeat,
+            isSubagent: v2.isSubagent || false,
+            parentKey: v2.parentKey || null,
+            toolHistory: v2.toolHistory.slice(-10)
+          };
+        }
+        return { villagers, seatAssignments: Array.from(this._seatAssignments.entries()).map(([bk, s]) => [bk, Array.from(s)]) };
+      }
+      fromJSON(data) {
+        if (!data || !data.villagers) return;
+        for (const [key, v2] of Object.entries(data.villagers)) {
+          this.villagers.set(key, {
+            key,
+            name: v2.name,
+            professionKey: v2.professionKey,
+            status: "idle",
+            subStatus: null,
+            mood: "happy",
+            taskText: "",
+            bubble: null,
+            facing: v2.facing || "south",
+            walkTarget: null,
+            wanderPauseUntil: 0,
+            assignedSeat: v2.assignedSeat || null,
+            toolHistory: v2.toolHistory || [],
+            isSubagent: v2.isSubagent || false,
+            parentKey: v2.parentKey || null,
+            updatedAt: Date.now()
+          });
+        }
+        if (data.seatAssignments) {
+          for (const [bk, keys] of data.seatAssignments) {
+            this._seatAssignments.set(bk, new Set(keys));
+          }
+        }
+        this._emit();
+      }
     };
     module2.exports = { VillageStore: VillageStore2 };
+  }
+});
+
+// src/core/event-bus.js
+var require_event_bus = __commonJS({
+  "src/core/event-bus.js"(exports2, module2) {
+    "use strict";
+    var EventBus2 = class {
+      /**
+       * @param {object} [options]
+       * @param {(error: unknown, event: string) => void} [options.onListenerError]
+       *   Called whenever a listener throws or its returned promise rejects. Defaults to logging
+       *   via `console.error`. Errors are always isolated to the listener that caused them — they
+       *   never propagate out of `emit()` and never stop other listeners from running.
+       */
+      constructor(options) {
+        options = options || {};
+        this._listeners = /* @__PURE__ */ new Map();
+        this._onListenerError = typeof options.onListenerError === "function" ? options.onListenerError : (err, event) => console.error(`[EventBus] listener error for "${event}":`, err);
+      }
+      /**
+       * Subscribe to an event. Multiple listeners on the same event are all called, in the order
+       * they were added.
+       *
+       * @template {keyof EventMap & string} K
+       * @param {K} event
+       * @param {(payload: EventMap[K], event: K) => void | Promise<void>} listener
+       * @returns {() => void} Call to remove this listener (equivalent to `off(event, listener)`).
+       */
+      on(event, listener) {
+        if (typeof event !== "string" || !event) {
+          throw new TypeError("EventBus.on: event must be a non-empty string");
+        }
+        if (typeof listener !== "function") {
+          throw new TypeError("EventBus.on: listener must be a function");
+        }
+        let set = this._listeners.get(event);
+        if (!set) {
+          set = /* @__PURE__ */ new Set();
+          this._listeners.set(event, set);
+        }
+        set.add(listener);
+        return () => this.off(event, listener);
+      }
+      /**
+       * Subscribe to an event for exactly one emission, then automatically unsubscribe.
+       *
+       * @template {keyof EventMap & string} K
+       * @param {K} event
+       * @param {(payload: EventMap[K], event: K) => void | Promise<void>} listener
+       * @returns {() => void} Call to cancel before it fires.
+       */
+      once(event, listener) {
+        if (typeof listener !== "function") {
+          throw new TypeError("EventBus.once: listener must be a function");
+        }
+        const wrapper = (payload, evt) => {
+          this.off(event, wrapper);
+          return listener(payload, evt);
+        };
+        return this.on(event, wrapper);
+      }
+      /**
+       * Remove a previously-added listener. Safe to call even if the listener was already removed
+       * or never added — just returns `false` in that case.
+       *
+       * @template {keyof EventMap & string} K
+       * @param {K} event
+       * @param {Function} listener
+       * @returns {boolean} Whether a listener was actually removed.
+       */
+      off(event, listener) {
+        const set = this._listeners.get(event);
+        if (!set) return false;
+        const removed = set.delete(listener);
+        if (set.size === 0) this._listeners.delete(event);
+        return removed;
+      }
+      /**
+       * Remove every listener for a given event, or every listener for every event if no event is
+       * given. Useful in teardown (e.g. a view's `onClose()`) if individual unsubscribe functions
+       * weren't kept around.
+       *
+       * @param {string} [event]
+       */
+      removeAllListeners(event) {
+        if (event === void 0) {
+          this._listeners.clear();
+          return;
+        }
+        this._listeners.delete(event);
+      }
+      /**
+       * @param {string} event
+       * @returns {number} How many listeners are currently subscribed to this event.
+       */
+      listenerCount(event) {
+        const set = this._listeners.get(event);
+        return set ? set.size : 0;
+      }
+      /**
+       * @returns {string[]} Every event name that currently has at least one listener.
+       */
+      eventNames() {
+        return Array.from(this._listeners.keys());
+      }
+      /**
+       * Publish an event. Every current listener for `event` is called with `payload`; listeners
+       * may be synchronous or return a Promise (`async` functions work directly). All listeners run
+       * even if one of them throws or rejects — failures are isolated and reported individually via
+       * `onListenerError`, never thrown back at the caller of `emit`.
+       *
+       * The returned Promise resolves once every listener has settled (with `Promise.allSettled`
+       * results), which is handy if a caller wants to know "has everyone finished handling this?"
+       * before moving on. Most callers can simply ignore the return value and not await it —
+       * `emit()` never rejects.
+       *
+       * @template {keyof EventMap & string} K
+       * @param {K} event
+       * @param {EventMap[K]} [payload]
+       * @returns {Promise<PromiseSettledResult<any>[]>}
+       */
+      async emit(event, payload) {
+        const set = this._listeners.get(event);
+        if (!set || set.size === 0) return [];
+        const listeners = Array.from(set);
+        const results = await Promise.allSettled(
+          listeners.map((listener) => {
+            try {
+              return Promise.resolve(listener(payload, event));
+            } catch (err) {
+              return Promise.reject(err);
+            }
+          })
+        );
+        for (const result of results) {
+          if (result.status === "rejected") {
+            try {
+              this._onListenerError(result.reason, event);
+            } catch (e) {
+            }
+          }
+        }
+        return results;
+      }
+    };
+    module2.exports = { EventBus: EventBus2 };
+  }
+});
+
+// src/memory/memory-manager.js
+var require_memory_manager = __commonJS({
+  "src/memory/memory-manager.js"(exports2, module2) {
+    "use strict";
+    var MEMORY_TIER = Object.freeze({
+      SHORT_TERM: "short-term",
+      SESSION: "session",
+      LONG_TERM: "long-term"
+    });
+    var ALL_TIERS = Object.freeze([MEMORY_TIER.SHORT_TERM, MEMORY_TIER.SESSION, MEMORY_TIER.LONG_TERM]);
+    var JSON_FORMAT_VERSION = 1;
+    var MemoryManagerError = class extends Error {
+      constructor(message, code, details) {
+        super(message);
+        this.name = "MemoryManagerError";
+        this.code = code || "MEMORY_MANAGER_ERROR";
+        if (details) this.details = details;
+      }
+    };
+    function generateId() {
+      if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        return crypto.randomUUID();
+      }
+      return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+        const r = Math.random() * 16 | 0;
+        const v2 = c === "x" ? r : r & 3 | 8;
+        return v2.toString(16);
+      });
+    }
+    var LONG_TERM_STORE_METHODS = ["add", "get", "list", "update", "delete", "clear", "toJSON", "fromJSON"];
+    var InMemoryLongTermStore = class {
+      constructor() {
+        this._items = /* @__PURE__ */ new Map();
+      }
+      add(item) {
+        this._items.set(item.id, item);
+        return item;
+      }
+      get(id) {
+        return this._items.get(id) || null;
+      }
+      list() {
+        return Array.from(this._items.values());
+      }
+      update(id, patch) {
+        const item = this._items.get(id);
+        if (!item) return null;
+        Object.assign(item, patch);
+        return item;
+      }
+      delete(id) {
+        return this._items.delete(id);
+      }
+      clear() {
+        this._items.clear();
+      }
+      toJSON() {
+        return Array.from(this._items.values());
+      }
+      fromJSON(items) {
+        this._items.clear();
+        for (const item of items || []) {
+          this._items.set(item.id, item);
+        }
+      }
+    };
+    var MemoryManager2 = class _MemoryManager {
+      /**
+       * @param {object} [options]
+       * @param {import('../core/event-bus').EventBus} [options.eventBus]
+       *   If provided, memory changes are published on it (`memory:remembered`,
+       *   `memory:evicted`, `memory:forgotten`, `memory:promoted`, `memory:sessionEnded`,
+       *   `memory:cleared`, `memory:loaded`), each with a small payload. Entirely optional.
+       * @param {LongTermMemoryStore} [options.longTermStore] Defaults to `InMemoryLongTermStore`.
+       *   Must implement the `LongTermMemoryStore` interface (checked at construction time).
+       * @param {number} [options.shortTermLimit] Max items kept in short-term memory (default 50).
+       *   Oldest is evicted once exceeded.
+       * @param {number} [options.sessionLimit] Max items kept per session (default: unlimited).
+       * @param {() => number} [options.now] Clock override, mainly for tests.
+       * @param {() => string} [options.idFactory] Id generator override, mainly for tests.
+       */
+      constructor(options) {
+        options = options || {};
+        this._now = typeof options.now === "function" ? options.now : () => Date.now();
+        this._generateId = typeof options.idFactory === "function" ? options.idFactory : generateId;
+        this._events = options.eventBus || null;
+        this._shortTermLimit = Number.isFinite(options.shortTermLimit) ? options.shortTermLimit : 50;
+        this._sessionLimit = Number.isFinite(options.sessionLimit) ? options.sessionLimit : Infinity;
+        this._shortTerm = [];
+        this._sessions = /* @__PURE__ */ new Map();
+        this._longTerm = options.longTermStore || new InMemoryLongTermStore();
+        this._assertValidStore(this._longTerm);
+      }
+      // ---------------------------------------------------------------------------------------
+      // Remember (write)
+      // ---------------------------------------------------------------------------------------
+      /**
+       * Generic write. Prefer `rememberShortTerm` / `rememberSession` / `rememberLongTerm` for
+       * clarity; this is what they all call into.
+       * @param {object} input
+       * @param {'short-term'|'session'|'long-term'} [input.tier] Defaults to `short-term`.
+       * @param {*} input.content Required. Any JSON-serializable value (or a string).
+       * @param {string} [input.sessionId] Required when `tier` is `session`.
+       * @param {string[]} [input.tags]
+       * @param {number} [input.importance] 0–1, default 0.5.
+       * @param {Record<string, any>} [input.metadata]
+       * @param {number} [input.ttlMs] If set, the item expires `ttlMs` after creation.
+       * @returns {MemoryItem} The stored item (a defensive copy).
+       */
+      remember(input) {
+        input = input || {};
+        if (input.content === void 0 || input.content === null) {
+          throw new MemoryManagerError("content is required to remember something", "INVALID_INPUT");
+        }
+        const tier = input.tier || MEMORY_TIER.SHORT_TERM;
+        if (!ALL_TIERS.includes(tier)) {
+          throw new MemoryManagerError(`unknown tier "${tier}"`, "INVALID_INPUT", { tier });
+        }
+        if (tier === MEMORY_TIER.SESSION && !input.sessionId) {
+          throw new MemoryManagerError("sessionId is required for session-tier memory", "INVALID_INPUT");
+        }
+        const at = this._now();
+        const item = {
+          id: this._generateId(),
+          tier,
+          sessionId: tier === MEMORY_TIER.SESSION ? input.sessionId : null,
+          content: input.content,
+          tags: Array.isArray(input.tags) ? input.tags.slice() : [],
+          importance: this._clampImportance(input.importance),
+          metadata: input.metadata && typeof input.metadata === "object" ? { ...input.metadata } : {},
+          createdAt: at,
+          updatedAt: at,
+          expiresAt: Number.isFinite(input.ttlMs) ? at + input.ttlMs : null
+        };
+        let evicted = null;
+        if (tier === MEMORY_TIER.SHORT_TERM) {
+          this._shortTerm.push(item);
+          if (this._shortTerm.length > this._shortTermLimit) {
+            evicted = this._shortTerm.shift();
+          }
+        } else if (tier === MEMORY_TIER.SESSION) {
+          const bucket = this._sessions.get(item.sessionId) || [];
+          bucket.push(item);
+          if (bucket.length > this._sessionLimit) {
+            evicted = bucket.shift();
+          }
+          this._sessions.set(item.sessionId, bucket);
+        } else {
+          this._longTerm.add(item);
+        }
+        this._emit("memory:remembered", { item: this._clone(item) });
+        if (evicted) this._emit("memory:evicted", { item: this._clone(evicted) });
+        return this._clone(item);
+      }
+      /**
+       * @param {*} content
+       * @param {object} [opts] Same options as `remember` minus `tier`/`sessionId`.
+       * @returns {MemoryItem}
+       */
+      rememberShortTerm(content, opts) {
+        return this.remember({ ...opts || {}, tier: MEMORY_TIER.SHORT_TERM, content });
+      }
+      /**
+       * @param {string} sessionId
+       * @param {*} content
+       * @param {object} [opts] Same options as `remember` minus `tier`/`sessionId`.
+       * @returns {MemoryItem}
+       */
+      rememberSession(sessionId, content, opts) {
+        return this.remember({ ...opts || {}, tier: MEMORY_TIER.SESSION, sessionId, content });
+      }
+      /**
+       * @param {*} content
+       * @param {object} [opts] Same options as `remember` minus `tier`/`sessionId`.
+       * @returns {MemoryItem}
+       */
+      rememberLongTerm(content, opts) {
+        return this.remember({ ...opts || {}, tier: MEMORY_TIER.LONG_TERM, content });
+      }
+      // ---------------------------------------------------------------------------------------
+      // Read
+      // ---------------------------------------------------------------------------------------
+      /**
+       * @param {string} id
+       * @returns {MemoryItem|null} A defensive copy, or `null` if not found (or expired).
+       */
+      recall(id) {
+        const item = this._findLive(id);
+        return item ? this._clone(item) : null;
+      }
+      /** Alias of `recall`. */
+      get(id) {
+        return this.recall(id);
+      }
+      /**
+       * @param {object} [filter]
+       * @param {'short-term'|'session'|'long-term'|Array<'short-term'|'session'|'long-term'>} [filter.tier]
+       *   Defaults to all tiers.
+       * @param {string} [filter.sessionId] Only meaningful for the `session` tier.
+       * @param {string[]} [filter.tags] Items must include at least one of these tags.
+       * @param {number} [filter.since] Only items created at/after this timestamp.
+       * @param {number} [filter.until] Only items created at/before this timestamp.
+       * @param {number} [filter.limit] Cap the number of results, most-recent-first.
+       * @returns {MemoryItem[]} Defensive copies, most-recent-first.
+       */
+      list(filter) {
+        filter = filter || {};
+        this._purgeExpired();
+        const tiers = filter.tier ? Array.isArray(filter.tier) ? filter.tier : [filter.tier] : ALL_TIERS;
+        let results = [];
+        for (const tier of tiers) {
+          results = results.concat(this._itemsForTier(tier, filter.sessionId));
+        }
+        results = results.filter((item) => this._matchesFilter(item, filter));
+        results.sort((a, b) => b.createdAt - a.createdAt);
+        if (Number.isFinite(filter.limit)) results = results.slice(0, filter.limit);
+        return results.map((item) => this._clone(item));
+      }
+      /**
+       * Search across memory by simple text/tag relevance. No embeddings, no AI provider — just
+       * word-overlap against stringified content plus a tag match bonus, ranked with a small
+       * recency/importance tie-break. Good enough for "find what's relevant" without depending
+       * on anything external; swap in a smarter `longTermStore` (e.g. one backed by a vector DB)
+       * if you need semantic search over long-term memory specifically.
+       * @param {string} query
+       * @param {object} [opts]
+       * @param {'short-term'|'session'|'long-term'|Array<string>} [opts.tier] Defaults to all tiers.
+       * @param {string} [opts.sessionId]
+       * @param {string[]} [opts.tags]
+       * @param {number} [opts.since]
+       * @param {number} [opts.until]
+       * @param {number} [opts.limit] Default 20.
+       * @param {number} [opts.minScore] Drop results scoring at/below this (default 0 — no match).
+       * @returns {(MemoryItem & { score: number })[]} Most relevant first.
+       */
+      search(query, opts) {
+        opts = opts || {};
+        const q = typeof query === "string" ? query.trim() : "";
+        const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+        const candidates = this.list({
+          tier: opts.tier,
+          sessionId: opts.sessionId,
+          tags: opts.tags,
+          since: opts.since,
+          until: opts.until
+        });
+        const minScore = Number.isFinite(opts.minScore) ? opts.minScore : 0;
+        const scored = candidates.map((item) => ({ item, score: this._score(item, terms) })).filter(({ score }) => terms.length === 0 ? true : score > minScore);
+        scored.sort((a, b) => {
+          if (b.score !== a.score) return b.score - a.score;
+          if (b.item.importance !== a.item.importance) return b.item.importance - a.item.importance;
+          return b.item.createdAt - a.item.createdAt;
+        });
+        const limit = Number.isFinite(opts.limit) ? opts.limit : 20;
+        return scored.slice(0, limit).map(({ item, score }) => ({ ...item, score }));
+      }
+      // ---------------------------------------------------------------------------------------
+      // Delete
+      // ---------------------------------------------------------------------------------------
+      /**
+       * Remove a single item by id, wherever it lives.
+       * @param {string} id
+       * @returns {boolean} Whether an item was actually removed.
+       */
+      forget(id) {
+        for (const tier of ALL_TIERS) {
+          const removed = this._removeFromTier(tier, id);
+          if (removed) {
+            this._emit("memory:forgotten", { item: this._clone(removed) });
+            return true;
+          }
+        }
+        return false;
+      }
+      /** Alias of `forget`. */
+      delete(id) {
+        return this.forget(id);
+      }
+      /** Drop everything in short-term memory. */
+      clearShortTerm() {
+        this._shortTerm = [];
+        this._emit("memory:cleared", { tier: MEMORY_TIER.SHORT_TERM });
+      }
+      /**
+       * Drop everything for one session (or every session if `sessionId` is omitted).
+       * @param {string} [sessionId]
+       */
+      clearSession(sessionId) {
+        if (sessionId === void 0) {
+          this._sessions.clear();
+        } else {
+          this._sessions.delete(sessionId);
+        }
+        this._emit("memory:cleared", { tier: MEMORY_TIER.SESSION, sessionId: sessionId ?? null });
+      }
+      /** Drop everything in the long-term store. */
+      clearLongTerm() {
+        this._longTerm.clear();
+        this._emit("memory:cleared", { tier: MEMORY_TIER.LONG_TERM });
+      }
+      /** Drop everything, across all three tiers. */
+      clearAll() {
+        this.clearShortTerm();
+        this.clearSession();
+        this.clearLongTerm();
+      }
+      // ---------------------------------------------------------------------------------------
+      // Session lifecycle / promotion
+      // ---------------------------------------------------------------------------------------
+      /**
+       * Move an item from short-term or session memory into the long-term store. The original
+       * is removed from its source tier; a new item (new id, `tier: 'long-term'`) is created in
+       * long-term memory.
+       * @param {string} id
+       * @param {object} [opts]
+       * @param {Record<string, any>} [opts.metadata] Shallow-merged into the promoted item's metadata.
+       * @param {string[]} [opts.tags] Replaces the item's tags if provided.
+       * @returns {MemoryItem} The new long-term item.
+       */
+      promote(id, opts) {
+        opts = opts || {};
+        let source = null;
+        let sourceTier = null;
+        for (const tier of [MEMORY_TIER.SHORT_TERM, MEMORY_TIER.SESSION]) {
+          const removed = this._removeFromTier(tier, id);
+          if (removed) {
+            source = removed;
+            sourceTier = tier;
+            break;
+          }
+        }
+        if (!source) {
+          throw new MemoryManagerError(
+            `no short-term or session item found with id "${id}" to promote`,
+            "NOT_FOUND",
+            { id }
+          );
+        }
+        const promoted = this.rememberLongTerm(source.content, {
+          tags: opts.tags || source.tags,
+          importance: source.importance,
+          metadata: opts.metadata ? { ...source.metadata, ...opts.metadata } : source.metadata
+        });
+        this._emit("memory:promoted", { from: sourceTier, item: promoted });
+        return promoted;
+      }
+      /**
+       * End a session: optionally promote some or all of its items to long-term, then clear it.
+       * @param {string} sessionId
+       * @param {object} [opts]
+       * @param {boolean|((item: MemoryItem) => boolean)} [opts.promote] `true` promotes every
+       *   item in the session; a function is called per-item to decide (e.g. `(i) => i.importance
+       *   >= 0.7`). Defaults to `false` (just clear, nothing carried forward).
+       * @returns {MemoryItem[]} Items promoted to long-term (empty if `opts.promote` was falsy).
+       */
+      endSession(sessionId, opts) {
+        opts = opts || {};
+        const items = this._sessions.get(sessionId) || [];
+        const promoted = [];
+        if (opts.promote) {
+          const shouldPromote = typeof opts.promote === "function" ? opts.promote : () => true;
+          for (const item of items.slice()) {
+            if (shouldPromote(this._clone(item))) {
+              promoted.push(this.promote(item.id));
+            }
+          }
+        }
+        this._sessions.delete(sessionId);
+        this._emit("memory:sessionEnded", { sessionId, promotedCount: promoted.length });
+        return promoted;
+      }
+      // ---------------------------------------------------------------------------------------
+      // Save / load (JSON)
+      // ---------------------------------------------------------------------------------------
+      /**
+       * @returns {object} Plain-object snapshot of everything MemoryManager holds (short-term,
+       *   every session, and the long-term store's own `toJSON()`). Safe to `JSON.stringify`.
+       */
+      toJSON() {
+        this._purgeExpired();
+        const sessions = {};
+        for (const [sessionId, items] of this._sessions.entries()) {
+          sessions[sessionId] = items.map((item) => this._clone(item));
+        }
+        return {
+          version: JSON_FORMAT_VERSION,
+          shortTerm: this._shortTerm.map((item) => this._clone(item)),
+          sessions,
+          longTerm: this._longTerm.toJSON()
+        };
+      }
+      /** @returns {string} `JSON.stringify(this.toJSON())`. */
+      exportJSON(indent) {
+        return JSON.stringify(this.toJSON(), null, indent === void 0 ? 2 : indent);
+      }
+      /**
+       * Replace all current state with a previously-saved snapshot (from `toJSON`/`exportJSON`).
+       * @param {object} data
+       */
+      loadJSON(data) {
+        data = data || {};
+        this._shortTerm = Array.isArray(data.shortTerm) ? data.shortTerm.map((item) => ({ ...item })) : [];
+        this._sessions = /* @__PURE__ */ new Map();
+        const sessions = data.sessions && typeof data.sessions === "object" ? data.sessions : {};
+        for (const sessionId of Object.keys(sessions)) {
+          this._sessions.set(sessionId, (sessions[sessionId] || []).map((item) => ({ ...item })));
+        }
+        this._longTerm.clear();
+        this._longTerm.fromJSON(Array.isArray(data.longTerm) ? data.longTerm : []);
+        this._emit("memory:loaded", {});
+      }
+      /** @param {string} json A string previously produced by `exportJSON`. */
+      importJSON(json) {
+        let data;
+        try {
+          data = JSON.parse(json);
+        } catch (e) {
+          throw new MemoryManagerError("importJSON received invalid JSON", "INVALID_INPUT", { cause: e.message });
+        }
+        this.loadJSON(data);
+      }
+      /**
+       * @param {object} data A snapshot from `toJSON`.
+       * @param {object} [options] Same constructor options as `new MemoryManager(...)`.
+       * @returns {MemoryManager}
+       */
+      static fromJSON(data, options) {
+        const manager = new _MemoryManager(options);
+        manager.loadJSON(data);
+        return manager;
+      }
+      // ---------------------------------------------------------------------------------------
+      // Internals
+      // ---------------------------------------------------------------------------------------
+      _assertValidStore(store) {
+        const missing = LONG_TERM_STORE_METHODS.filter((m) => typeof store[m] !== "function");
+        if (missing.length) {
+          throw new MemoryManagerError(
+            `longTermStore is missing required method(s): ${missing.join(", ")}`,
+            "INVALID_STORE",
+            { missing }
+          );
+        }
+      }
+      _clampImportance(value) {
+        if (!Number.isFinite(value)) return 0.5;
+        return Math.max(0, Math.min(1, value));
+      }
+      _itemsForTier(tier, sessionId) {
+        if (tier === MEMORY_TIER.SHORT_TERM) return this._shortTerm.slice();
+        if (tier === MEMORY_TIER.LONG_TERM) return this._longTerm.list().slice();
+        if (tier === MEMORY_TIER.SESSION) {
+          if (sessionId !== void 0) return (this._sessions.get(sessionId) || []).slice();
+          let all = [];
+          for (const items of this._sessions.values()) all = all.concat(items);
+          return all;
+        }
+        return [];
+      }
+      _matchesFilter(item, filter) {
+        if (filter.sessionId !== void 0 && item.tier === MEMORY_TIER.SESSION && item.sessionId !== filter.sessionId) {
+          return false;
+        }
+        if (filter.tags && filter.tags.length && !filter.tags.some((t) => item.tags.includes(t))) {
+          return false;
+        }
+        if (Number.isFinite(filter.since) && item.createdAt < filter.since) return false;
+        if (Number.isFinite(filter.until) && item.createdAt > filter.until) return false;
+        return true;
+      }
+      /** Word-overlap + tag-match score against a lowercased term list. 0 = no match. */
+      _score(item, terms) {
+        if (terms.length === 0) return 1;
+        const haystack = ((typeof item.content === "string" ? item.content : JSON.stringify(item.content)) + " " + item.tags.join(" ")).toLowerCase();
+        let matches = 0;
+        for (const term of terms) {
+          if (haystack.includes(term)) matches += 1;
+        }
+        if (matches === 0) return 0;
+        const tagBonus = item.tags.some((t) => terms.includes(t.toLowerCase())) ? 0.5 : 0;
+        return matches / terms.length + tagBonus;
+      }
+      _findLive(id) {
+        for (const tier of ALL_TIERS) {
+          const item = this._itemsForTier(tier).find((i) => i.id === id);
+          if (item && !this._isExpired(item)) return item;
+        }
+        return null;
+      }
+      _removeFromTier(tier, id) {
+        if (tier === MEMORY_TIER.SHORT_TERM) {
+          const idx = this._shortTerm.findIndex((i) => i.id === id);
+          if (idx === -1) return null;
+          return this._shortTerm.splice(idx, 1)[0];
+        }
+        if (tier === MEMORY_TIER.SESSION) {
+          for (const [sessionId, items] of this._sessions.entries()) {
+            const idx = items.findIndex((i) => i.id === id);
+            if (idx !== -1) {
+              const [removed] = items.splice(idx, 1);
+              if (items.length === 0) this._sessions.delete(sessionId);
+              return removed;
+            }
+          }
+          return null;
+        }
+        if (tier === MEMORY_TIER.LONG_TERM) {
+          const item = this._longTerm.get(id);
+          if (!item) return null;
+          this._longTerm.delete(id);
+          return item;
+        }
+        return null;
+      }
+      _isExpired(item) {
+        return Number.isFinite(item.expiresAt) && this._now() >= item.expiresAt;
+      }
+      /** Lazily drop expired short-term/session items. Long-term items don't auto-expire. */
+      _purgeExpired() {
+        const now = this._now();
+        this._shortTerm = this._shortTerm.filter((i) => !Number.isFinite(i.expiresAt) || now < i.expiresAt);
+        for (const [sessionId, items] of this._sessions.entries()) {
+          const kept = items.filter((i) => !Number.isFinite(i.expiresAt) || now < i.expiresAt);
+          if (kept.length === 0) this._sessions.delete(sessionId);
+          else this._sessions.set(sessionId, kept);
+        }
+      }
+      /** Shallow-safe copy so callers can't mutate internal state through a returned item. */
+      _clone(item) {
+        return {
+          ...item,
+          tags: item.tags.slice(),
+          metadata: { ...item.metadata }
+        };
+      }
+      _emit(event, payload) {
+        if (!this._events) return;
+        try {
+          this._events.emit(event, payload);
+        } catch (e) {
+        }
+      }
+    };
+    module2.exports = { MemoryManager: MemoryManager2, MemoryManagerError, MEMORY_TIER, InMemoryLongTermStore };
   }
 });
 
@@ -1376,6 +2354,7 @@ var require_chat_view = __commonJS({
         super(leaf);
         this.plugin = plugin;
         this.history = [];
+        this._abortController = null;
       }
       getViewType() {
         return VIEW_TYPE_AI_CHAT2;
@@ -1416,8 +2395,17 @@ var require_chat_view = __commonJS({
           cls: "ai-chat-input",
           attr: { placeholder: "Ask anything... (Enter to send, Shift+Enter for newline)", rows: "3" }
         });
-        this.sendBtn = inputArea.createEl("button", { text: "Send", cls: "ai-chat-send-btn mod-cta" });
+        const btnRow = inputArea.createDiv({ cls: "ai-chat-btn-row" });
+        this.sendBtn = btnRow.createEl("button", { text: "Send", cls: "ai-chat-send-btn mod-cta" });
+        this.stopBtn = btnRow.createEl("button", { text: "Stop", cls: "ai-chat-stop-btn" });
+        this.stopBtn.disabled = true;
         this.sendBtn.addEventListener("click", () => this.handleSend());
+        this.stopBtn.addEventListener("click", () => {
+          if (this._abortController) {
+            this._abortController.abort();
+            this._abortController = null;
+          }
+        });
         this.inputEl.addEventListener("keydown", (e) => {
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
@@ -1453,27 +2441,47 @@ Question: ${text}`;
         this.renderMessage("user", text);
         this.inputEl.value = "";
         this.sendBtn.disabled = true;
-        const thinkingEl = this.renderMessage("assistant", "Thinking...");
+        this.stopBtn.disabled = false;
+        const msgEl = this.renderMessage("assistant", "");
+        const bodyEl = msgEl.querySelector(".ai-chat-body");
+        let accumulated = "";
         const village = this.plugin.village;
         village.ensure("innkeeper", "innkeeper", "Innkeeper");
         village.setStatus("innkeeper", "working", { taskText: text.slice(0, 80) });
+        this._abortController = new AbortController();
         try {
-          const reply = await this.plugin.sendMessage(
-            this.history.map((h) => ({ role: h.role, content: h.content }))
+          const reply = await this.plugin.sendStreamMessage(
+            this.history.map((h) => ({ role: h.role, content: h.content })),
+            (partial) => {
+              accumulated = partial;
+              bodyEl.setText(accumulated + "\u258C");
+              this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+            },
+            this._abortController.signal
           );
-          thinkingEl.remove();
-          this.renderMessage("assistant", reply);
+          accumulated = reply;
+          this.plugin.renderMarkdown(bodyEl, reply);
+          this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
           this.history.push({ role: "assistant", content: reply });
           village.setStatus("innkeeper", "finished", { taskText: "Answered a question" });
           village.say("innkeeper", reply.slice(0, 90));
         } catch (err) {
-          thinkingEl.remove();
-          this.renderMessage("assistant", `\u26A0\uFE0F Error: ${err.message}`);
-          new Notice(`AI Chat error: ${err.message}`);
-          village.setStatus("innkeeper", "error", { taskText: err.message.slice(0, 80) });
-          village.say("innkeeper", `Ink spilled \u2014 ${err.message.slice(0, 70)}`);
+          if (err.name === "AbortError") {
+            bodyEl.setText(accumulated + "\n\n*(stopped)*");
+            if (accumulated) {
+              this.history.push({ role: "assistant", content: accumulated });
+            }
+            village.setStatus("innkeeper", "idle", { taskText: "Stopped" });
+          } else {
+            bodyEl.setText(`\u26A0\uFE0F Error: ${err.message}`);
+            new Notice(`AI Chat error: ${err.message}`);
+            village.setStatus("innkeeper", "error", { taskText: err.message.slice(0, 80) });
+            village.say("innkeeper", `Ink spilled \u2014 ${err.message.slice(0, 70)}`);
+          }
         } finally {
           this.sendBtn.disabled = false;
+          this.stopBtn.disabled = true;
+          this._abortController = null;
         }
       }
       renderMessage(role, text) {
@@ -1483,11 +2491,19 @@ Question: ${text}`;
           text: role === "user" ? "You" : this.plugin.getActiveProvider()?.name || "AI"
         });
         const bodyEl = msgEl.createDiv({ cls: "ai-chat-body" });
-        bodyEl.setText(text);
+        if (role === "assistant" && text) {
+          this.plugin.renderMarkdown(bodyEl, text);
+        } else {
+          bodyEl.setText(text);
+        }
         this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
         return msgEl;
       }
       async onClose() {
+        if (this._abortController) {
+          this._abortController.abort();
+          this._abortController = null;
+        }
       }
     };
     module2.exports = { AIChatView: AIChatView2 };
@@ -1527,12 +2543,13 @@ var require_agent_view = __commonJS({
     var { VIEW_TYPE_AI_AGENT: VIEW_TYPE_AI_AGENT2 } = require_constants();
     var { MUTATING_TOOLS, AGENT_EDITABLE_FIELDS } = require_tool_metadata();
     var { sleep } = require_agent_loop();
-    var { villageSlug, resolveVillageProfession } = require_village_roster();
+    var { villageSlug, resolveVillageProfession, VILLAGE_BUILDINGS, VILLAGE_PROFESSIONS } = require_village_roster();
     var AgentView2 = class extends ItemView {
       constructor(leaf, plugin) {
         super(leaf);
         this.plugin = plugin;
         this.running = false;
+        this.parallelRuns = /* @__PURE__ */ new Map();
       }
       getViewType() {
         return VIEW_TYPE_AI_AGENT2;
@@ -1561,9 +2578,11 @@ var require_agent_view = __commonJS({
         this.stepCounterEl = btnRow.createDiv({ cls: "ai-agent-step-counter" });
         this.copyBtn = btnRow.createEl("button", { text: "Copy log" });
         this.runBtn = btnRow.createEl("button", { text: "Run", cls: "mod-cta" });
+        this.parallelBtn = btnRow.createEl("button", { text: "Run All" });
         this.stopBtn = btnRow.createEl("button", { text: "Stop" });
         this.stopBtn.disabled = true;
         this.runBtn.addEventListener("click", () => this.startRun());
+        this.parallelBtn.addEventListener("click", () => this.startParallel());
         this.stopBtn.addEventListener("click", () => {
           this.running = false;
           this.stopBtn.disabled = true;
@@ -1580,18 +2599,13 @@ var require_agent_view = __commonJS({
         });
         this.logEl = container.createDiv({ cls: "ai-agent-log" });
       }
-      /**
-       * Informational only — no picking here. If the user has defined a team in settings, the
-       * Mayor always decides which members (if any) a goal actually needs, based on each role's
-       * description vs. what the goal requires. An empty team still means "run solo."
-       */
       renderTeamNotice(container) {
         const team = this.plugin.settings.agentTeam || [];
         if (team.length === 0) return;
         const box = container.createDiv({ cls: "ai-agent-team-box" });
         box.createDiv({
           cls: "ai-agent-team-label",
-          text: `Team on file: ${team.map((m) => m.name || "Untitled role").join(", ")}. The Mayor picks whichever of these (if any) fit each goal automatically \u2014 nothing to select here.`
+          text: `Team on file: ${team.map((m) => m.name || "Untitled role").join(", ")}. The Mayor picks whichever of these (if any) fit each goal automatically.`
         });
       }
       setStepCounter(text) {
@@ -1603,6 +2617,7 @@ var require_agent_view = __commonJS({
         this.logEl.empty();
         this.running = true;
         this.runBtn.disabled = true;
+        this.parallelBtn.disabled = true;
         this.stopBtn.disabled = false;
         this.setStepCounter("");
         const team = this.plugin.settings.agentTeam || [];
@@ -1622,106 +2637,173 @@ var require_agent_view = __commonJS({
           village.ensure("mayor", "mayor", "Mayor");
           await this.runStage(goal, null, null, "mayor");
         } else {
+          await this.runTeamSequential(goal, selectedMembers);
+        }
+        this.running = false;
+        this.runBtn.disabled = false;
+        this.parallelBtn.disabled = false;
+        this.stopBtn.disabled = true;
+      }
+      async startParallel() {
+        const goal = this.goalInput.value.trim();
+        if (!goal) return;
+        this.logEl.empty();
+        this.running = true;
+        this.runBtn.disabled = true;
+        this.parallelBtn.disabled = true;
+        this.stopBtn.disabled = false;
+        this.setStepCounter("");
+        const team = this.plugin.settings.agentTeam || [];
+        let selectedMembers = [];
+        if (team.length > 0) {
+          this.setStepCounter("Picking parallel team\u2026");
+          try {
+            selectedMembers = await this.plugin.selectTeamForGoal(goal, team);
+          } catch (err) {
+            this.logStep("error", `Could not select team (${err.message}) \u2014 running solo instead.`);
+            selectedMembers = [];
+          }
+        }
+        const village = this.plugin.village;
+        if (selectedMembers.length <= 1) {
           this.logStep("goal", goal);
-          this.logStep(
-            "team-header",
-            `Auto-selected team: ${selectedMembers.map((m) => m.name).join(", ")}`
+          village.ensure("mayor", "mayor", "Mayor");
+          await this.runStage(goal, null, null, "mayor");
+        } else {
+          this.logStep("goal", goal);
+          this.logStep("team-header", `Running ${selectedMembers.length} members in parallel: ${selectedMembers.map((m) => m.name).join(", ")}`);
+          const results = await Promise.allSettled(
+            selectedMembers.map(async (member) => {
+              const key = villageSlug(member.name);
+              const professionKey = resolveVillageProfession(member.name, member.role);
+              village.ensure(key, professionKey, member.name);
+              this.logStep("team-header", `== ${member.name} (parallel) ==`);
+              const msg = await this.runStage(goal, member.role, member.name, key);
+              return { key, member, msg };
+            })
           );
-          let prevReport = goal;
-          let prevName = null;
-          let prevKey = null;
           const finishedKeys = [];
-          const finishedReports = /* @__PURE__ */ new Map();
-          for (const member of selectedMembers) {
-            if (!this.running) break;
-            this.logStep("team-header", `== ${member.name} ==`);
-            const key = villageSlug(member.name);
-            const professionKey = resolveVillageProfession(member.name, member.role);
-            village.ensure(key, professionKey, member.name);
-            if (prevKey) {
-              village.messenger(prevKey, key, `I'll carry this over to ${member.name}.`);
+          for (const result of results) {
+            if (result.status === "fulfilled" && result.value && result.value.msg !== null) {
+              finishedKeys.push(result.value.key);
             }
-            const stageGoal = prevName ? `Overall goal: ${goal}
-
-The previous team member ("${prevName}") reported:
-${prevReport}
-
-Continue toward the overall goal, focusing on your role.` : goal;
-            const finalMsg = await this.runStage(stageGoal, member.role, member.name, key);
-            if (finalMsg === null) break;
-            prevReport = finalMsg;
-            prevName = member.name;
-            prevKey = key;
-            finishedKeys.push(key);
-            finishedReports.set(key, finalMsg);
           }
-          let attendeeKeys = [];
           if (finishedKeys.length > 0 && this.running) {
-            const finishedMembers = finishedKeys.map((key) => {
-              const v = village.villagers.get(key);
-              return { key, name: v ? v.name : key, report: finishedReports.get(key) || "" };
-            });
             village.ensure("mayor", "mayor", "Mayor");
-            village.setStatus("mayor", "reviewing", { taskText: "Deciding who needs to attend the meeting" });
-            this.setStepCounter("The Mayor is deciding who should attend the meeting\u2026");
-            let attendees = finishedMembers;
-            try {
-              attendees = await this.plugin.selectMeetingAttendees(goal, finishedMembers);
-            } catch (err) {
-              this.logStep("error", `The Mayor couldn't decide attendees (${err.message}) \u2014 inviting everyone.`);
-            }
-            attendeeKeys = attendees.map((a) => a.key);
-            this.logStep(
-              "team-header",
-              `The Mayor calls in: ${attendees.map((a) => a.name).join(", ") || "(no one \u2014 nothing to discuss)"}`
-            );
-          }
-          if (attendeeKeys.length > 0 && this.running) {
-            for (const key of attendeeKeys) {
-              const v = village.villagers.get(key);
-              if (!v) continue;
-              village.say(key, "Done on my end \u2014 heading to the Town Hall.");
-              this.logStep("meeting", `${v.name} announces they're heading to the Town Hall.`);
-              await sleep(350);
-            }
-            this.setStepCounter("Meeting at the Town Hall\u2026");
-            village.setStatus("mayor", "meeting", { taskText: "Presiding over the meeting" });
-            for (const key of attendeeKeys) {
-              village.setStatus(key, "meeting", { taskText: "Heading to the Town Hall to report back" });
-            }
-            village.say("townhall", `The team regroups at the Town Hall to close out: "${goal.slice(0, 90)}"`);
-            await sleep(1200);
-            for (const key of attendeeKeys) {
-              if (!this.running) break;
-              const v = village.villagers.get(key);
-              if (!v) continue;
-              village.setStatus(key, "meeting", { taskText: "Reporting back" });
-              village.say(key, "Reporting back \u2014 my part is done.");
-              this.logStep("meeting", `${v.name} reports back at the Town Hall.`);
-              await sleep(500);
-            }
-            await sleep(500);
-            village.setStatus("mayor", "finished", { taskText: "Meeting closed" });
+            this.logStep("team-header", "All parallel members done \u2014 reporting to Mayor.");
+            village.say("mayor", `All ${finishedKeys.length} team members have reported back.`);
           }
           for (const member of selectedMembers) {
             const key = villageSlug(member.name);
-            const v = village.villagers.get(key);
-            if (!v) continue;
+            const v2 = village.villagers.get(key);
+            if (!v2) continue;
             if (finishedKeys.includes(key)) {
               village.setStatus(key, "finished", { taskText: "Done" });
-            } else if (v.status === "meeting" || v.status === "working") {
+            } else if (v2.status === "working" || v2.status === "meeting") {
               village.setStatus(key, "idle", { taskText: "" });
             }
           }
         }
         this.running = false;
         this.runBtn.disabled = false;
+        this.parallelBtn.disabled = false;
         this.stopBtn.disabled = true;
       }
-      /**
-       * Runs one agent loop to completion (or until stopped/erroring).
-       * Returns the agent's final message string, or null if it didn't finish cleanly.
-       */
+      async runTeamSequential(goal, selectedMembers) {
+        const village = this.plugin.village;
+        this.logStep("goal", goal);
+        this.logStep("team-header", `Auto-selected team: ${selectedMembers.map((m) => m.name).join(", ")}`);
+        let prevReport = goal;
+        let prevName = null;
+        let prevKey = null;
+        const finishedKeys = [];
+        const finishedReports = /* @__PURE__ */ new Map();
+        for (const member of selectedMembers) {
+          if (!this.running) break;
+          this.logStep("team-header", `== ${member.name} ==`);
+          const key = villageSlug(member.name);
+          const professionKey = resolveVillageProfession(member.name, member.role);
+          village.ensure(key, professionKey, member.name);
+          if (prevKey) {
+            const toProf = VILLAGE_PROFESSIONS[professionKey];
+            const toAnchor = VILLAGE_BUILDINGS[toProf.building];
+            village.setStatus(prevKey, "walking", { taskText: `Walking to ${member.name}` });
+            village.walkTo(prevKey, toAnchor.x, toAnchor.y + 3, () => {
+              village.setStatus(prevKey, "finished", { taskText: `Handed off to ${member.name}` });
+            });
+            village.messenger(prevKey, key, `I'll carry this over to ${member.name}.`);
+            await sleep(900);
+          }
+          const stageGoal = prevName ? `Overall goal: ${goal}
+
+The previous team member ("${prevName}") reported:
+${prevReport}
+
+Continue toward the overall goal, focusing on your role.` : goal;
+          const finalMsg = await this.runStage(stageGoal, member.role, member.name, key);
+          if (finalMsg === null) break;
+          prevReport = finalMsg;
+          prevName = member.name;
+          prevKey = key;
+          finishedKeys.push(key);
+          finishedReports.set(key, finalMsg);
+        }
+        let attendeeKeys = [];
+        if (finishedKeys.length > 0 && this.running) {
+          const finishedMembers = finishedKeys.map((key) => {
+            const v2 = village.villagers.get(key);
+            return { key, name: v2 ? v2.name : key, report: finishedReports.get(key) || "" };
+          });
+          village.ensure("mayor", "mayor", "Mayor");
+          village.setStatus("mayor", "reviewing", { taskText: "Deciding who needs to attend the meeting" });
+          this.setStepCounter("The Mayor is deciding who should attend the meeting\u2026");
+          let attendees = finishedMembers;
+          try {
+            attendees = await this.plugin.selectMeetingAttendees(goal, finishedMembers);
+          } catch (err) {
+            this.logStep("error", `The Mayor couldn't decide attendees (${err.message}) \u2014 inviting everyone.`);
+          }
+          attendeeKeys = attendees.map((a) => a.key);
+          this.logStep("team-header", `The Mayor calls in: ${attendees.map((a) => a.name).join(", ") || "(no one \u2014 nothing to discuss)"}`);
+        }
+        if (attendeeKeys.length > 0 && this.running) {
+          for (const key of attendeeKeys) {
+            const v2 = village.villagers.get(key);
+            if (!v2) continue;
+            village.say(key, "Done on my end \u2014 heading to the Town Hall.");
+            this.logStep("meeting", `${v2.name} announces they're heading to the Town Hall.`);
+            await sleep(350);
+          }
+          this.setStepCounter("Meeting at the Town Hall\u2026");
+          village.setStatus("mayor", "meeting", { taskText: "Presiding over the meeting" });
+          for (const key of attendeeKeys) {
+            village.setStatus(key, "meeting", { taskText: "Heading to the Town Hall to report back" });
+          }
+          village.say("townhall", `The team regroups at the Town Hall to close out: "${goal.slice(0, 90)}"`);
+          await sleep(1200);
+          for (const key of attendeeKeys) {
+            if (!this.running) break;
+            const v2 = village.villagers.get(key);
+            if (!v2) continue;
+            village.setStatus(key, "meeting", { taskText: "Reporting back" });
+            village.say(key, "Reporting back \u2014 my part is done.");
+            this.logStep("meeting", `${v2.name} reports back at the Town Hall.`);
+            await sleep(500);
+          }
+          await sleep(500);
+          village.setStatus("mayor", "finished", { taskText: "Meeting closed" });
+        }
+        for (const member of selectedMembers) {
+          const key = villageSlug(member.name);
+          const v2 = village.villagers.get(key);
+          if (!v2) continue;
+          if (finishedKeys.includes(key)) {
+            village.setStatus(key, "finished", { taskText: "Done" });
+          } else if (v2.status === "meeting" || v2.status === "working") {
+            village.setStatus(key, "idle", { taskText: "" });
+          }
+        }
+      }
       async runStage(goalText, roleText, label, villageKey) {
         const transcript = [{ role: "user", content: goalText }];
         const maxSteps = this.plugin.settings.agentMaxSteps || 20;
@@ -1729,38 +2811,48 @@ Continue toward the overall goal, focusing on your role.` : goal;
         const prefix = label ? `[${label}] ` : "";
         const village = this.plugin.village;
         const vkey = villageKey || "mayor";
-        village.setStatus(vkey, "working", { taskText: "Getting started..." });
+        village.setBubble(vkey, "\u{1F4AD}", "Getting started...", 0);
+        village.setStatus(vkey, "working", { taskText: "Getting started...", subStatus: "thinking" });
         while (this.running && steps < maxSteps) {
           steps++;
           this.setStepCounter(`Step ${steps} / ${maxSteps}${label ? ` \u2014 ${label}` : ""}`);
-          let raw;
+          village.setBubble(vkey, "\u{1F4AD}", "Thinking...", 0);
           const thinkingEl = this.logStep("thinking", `${prefix}Thinking\u2026`);
+          let raw;
           try {
             raw = await this.plugin.agentCall(transcript, roleText, (partial) => {
               const preview = partial.length > 400 ? `\u2026${partial.slice(-400)}` : partial;
               thinkingEl.setText(`${prefix}${preview}`);
               this.logEl.scrollTop = this.logEl.scrollHeight;
+              village.setBubble(vkey, "\u{1F4AD}", partial.slice(0, 80), 0);
             });
           } catch (err) {
             thinkingEl.remove();
             this.logStep("error", `${prefix}${err.message}`);
-            village.setStatus(vkey, "error", { taskText: err.message.slice(0, 80) });
+            village.setBubble(vkey, "\u26A0\uFE0F", err.message.slice(0, 40));
+            village.setStatus(vkey, "error", { taskText: err.message.slice(0, 80), bubble: null });
+            village.addToolEntry(vkey, "agent_call", { error: err.message }, "error", err.message.slice(0, 100));
             village.say(vkey, `Something went wrong \u2014 ${err.message.slice(0, 70)}`);
             return null;
           }
           thinkingEl.remove();
+          village.clearBubble(vkey);
           let parsed;
           try {
             parsed = this.plugin.parseAgentResponse(raw);
           } catch (err) {
             this.logStep("error", `${prefix}${err.message}`);
-            village.setStatus(vkey, "error", { taskText: err.message.slice(0, 80) });
+            village.setBubble(vkey, "\u26A0\uFE0F", err.message.slice(0, 40));
+            village.setStatus(vkey, "error", { taskText: err.message.slice(0, 80), bubble: null });
+            village.addToolEntry(vkey, "parse", { error: err.message }, "error", err.message.slice(0, 100));
             return null;
           }
           transcript.push({ role: "assistant", content: JSON.stringify(parsed) });
           if (parsed.final) {
             this.logStep("final", `${prefix}${parsed.final}`);
-            village.setStatus(vkey, "finished", { taskText: "Done" });
+            village.setBubble(vkey, "\u2705", "Done!");
+            village.setStatus(vkey, "finished", { taskText: "Done", bubble: null });
+            village.addToolEntry(vkey, "final", {}, "done", parsed.final.slice(0, 100));
             village.say(vkey, parsed.final.slice(0, 90));
             this.setStepCounter("");
             return parsed.final;
@@ -1772,35 +2864,55 @@ Continue toward the overall goal, focusing on your role.` : goal;
           }
           if (parsed.thought) {
             this.logStep("thought", `${prefix}${parsed.thought}`);
-            village.setStatus(vkey, "working", { taskText: parsed.thought.slice(0, 80) });
+            village.setBubble(vkey, "\u{1F4AD}", parsed.thought.slice(0, 80), 0);
+            village.setStatus(vkey, "working", { taskText: parsed.thought.slice(0, 80), subStatus: "thinking" });
           }
           this.logStep("action", `${prefix}${parsed.tool}(${JSON.stringify(parsed.args || {})})`);
-          village.setStatus(vkey, "working", { taskText: `${parsed.tool}...` });
+          const toolSubStatus = village.classifyTool(parsed.tool);
+          village.setBubble(vkey, toolSubStatus === "reading" ? "\u{1F4D6}" : toolSubStatus === "writing" ? "\u270D\uFE0F" : "\u2699\uFE0F", `${parsed.tool}...`, 0);
+          village.setStatus(vkey, "working", { taskText: `${parsed.tool}...`, subStatus: toolSubStatus });
+          const isSubtaskTool = parsed.tool === "Task" || parsed.tool === "agent";
+          if (isSubtaskTool) {
+            const subName = parsed.args && parsed.args.name || `${v.name}'s subtask`;
+            const subDesc = parsed.args && parsed.args.description || parsed.tool;
+            const sub = village.spawnSubagent(vkey, subName, subDesc.slice(0, 60));
+            if (sub) {
+              setTimeout(() => village.despawnSubagent(sub.key), 3e3);
+            }
+          }
           const isMutating = MUTATING_TOOLS.has(parsed.tool);
           let resultText;
           if (isMutating && !this.plugin.settings.agentAutoApprove) {
-            village.setStatus(vkey, "waiting", { taskText: `Awaiting approval: ${parsed.tool}` });
+            village.setBubble(vkey, "\u{1F6D1}", "Needs approval", 0);
+            village.setStatus(vkey, "waiting", { taskText: `Awaiting approval: ${parsed.tool}`, bubble: null });
             const decision = await this.askApproval(parsed.tool, parsed.args || {}, label);
+            village.clearBubble(vkey);
+            village.setBubble(vkey, "\u270D\uFE0F", `${parsed.tool}...`, 0);
             village.setStatus(vkey, "working", { taskText: `${parsed.tool}...` });
             if (!decision.approved) {
               resultText = "User skipped this action; it was not performed.";
               this.logStep("skipped", `${prefix}${resultText}`);
+              village.addToolEntry(vkey, parsed.tool, parsed.args, "skipped", "");
             } else {
               try {
                 resultText = await this.plugin.runAgentTool(parsed.tool, decision.args);
                 this.logStep("result", `${prefix}${resultText}`);
+                village.addToolEntry(vkey, parsed.tool, parsed.args, "done", resultText);
               } catch (err) {
                 resultText = `Error: ${err.message}`;
                 this.logStep("error", `${prefix}${resultText}`);
+                village.addToolEntry(vkey, parsed.tool, parsed.args, "error", err.message);
               }
             }
           } else {
             try {
               resultText = await this.plugin.runAgentTool(parsed.tool, parsed.args || {});
               this.logStep("result", `${prefix}${resultText}`);
+              village.addToolEntry(vkey, parsed.tool, parsed.args, "done", resultText);
             } catch (err) {
               resultText = `Error: ${err.message}`;
               this.logStep("error", `${prefix}${resultText}`);
+              village.addToolEntry(vkey, parsed.tool, parsed.args, "error", err.message);
             }
           }
           transcript.push({ role: "user", content: `Tool result:
@@ -1815,9 +2927,6 @@ ${resultText}` });
         this.setStepCounter("");
         return null;
       }
-      // Resolves to {approved: false} on Skip, or {approved: true, args} on Approve — args is the
-      // original tool args, with the editable field (if this tool has one) replaced by whatever
-      // the user left in the field.
       askApproval(tool, args, label) {
         return new Promise((resolve) => {
           const row = this.logEl.createDiv({ cls: "ai-agent-approval" });
@@ -1887,13 +2996,18 @@ var require_village_view = __commonJS({
     var { ItemView } = require("obsidian");
     var { VIEW_TYPE_AI_VILLAGE: VIEW_TYPE_AI_VILLAGE2 } = require_constants();
     var { VILLAGE_BUILDINGS, VILLAGE_PROFESSIONS, VILLAGE_SMALLTALK } = require_village_roster();
-    var VILLAGE_STATUS_PRIORITY = ["error", "working", "meeting", "reviewing", "waiting", "finished", "idle"];
-    function villageMoodIcon(status, extra) {
+    var VILLAGE_STATUS_PRIORITY = ["error", "walking", "working", "meeting", "reviewing", "waiting", "finished", "idle"];
+    var VILLAGE_TICK_MS = 200;
+    var MOBILE_TICK_MS = 500;
+    function villageMoodIcon(status, subStatus, extra) {
       if (status === "error") return "\u26A0\uFE0F";
       if (status === "finished") return "\u2728";
+      if (status === "walking") return "\u{1F6B6}";
       if (extra === "sleeping") return "\u{1F634}";
       if (extra === "chatting") return "\u{1F4AC}";
       if (extra === "collaborating") return "\u{1F91D}";
+      if (status === "working" && subStatus === "reading") return "\u{1F4D6}";
+      if (status === "working" && subStatus === "writing") return "\u270D\uFE0F";
       if (status === "working") return "\u2699\uFE0F";
       if (status === "meeting") return "\u{1F5E3}\uFE0F";
       if (status === "reviewing") return "\u{1F4AD}";
@@ -1921,11 +3035,18 @@ var require_village_view = __commonJS({
         this.unsub = null;
         this.wanderInterval = null;
         this.tickInterval = null;
+        this.gameLoop = null;
         this.prevStatus = /* @__PURE__ */ new Map();
         this.meetingTimers = /* @__PURE__ */ new Map();
         this.villagerHidden = /* @__PURE__ */ new Set();
         this.chattingUntil = /* @__PURE__ */ new Map();
         this.chatCooldown = /* @__PURE__ */ new Map();
+        this.prevPositions = /* @__PURE__ */ new Map();
+        this.diagnosticsOpen = /* @__PURE__ */ new Set();
+        this.mobileMode = this.plugin.settings?.mobileMode || false;
+        this.touchStart = null;
+        this.scenePan = { x: 0, y: 0 };
+        this.isPanning = false;
       }
       getViewType() {
         return VIEW_TYPE_AI_VILLAGE2;
@@ -1943,7 +3064,9 @@ var require_village_view = __commonJS({
         const toolbar = container.createDiv({ cls: "ai-village-toolbar" });
         toolbar.createDiv({ cls: "ai-village-title", text: "The Village" });
         const legend = toolbar.createDiv({ cls: "ai-village-legend" });
-        legend.createSpan({ text: "\u2699\uFE0F working  \u{1F5E3}\uFE0F meeting  \u{1F4AD} reviewing  \u231B waiting  \u2728 finished  \u26A0\uFE0F error" });
+        legend.createSpan({ text: "\u2699\uFE0F working  \u{1F5E3}\uFE0F meeting  \u{1F4AD} reviewing  \u231B waiting  \u2728 finished  \u26A0\uFE0F error  \u{1F6B6} walking" });
+        this.diagBtn = toolbar.createEl("button", { cls: "ai-village-diag-btn", text: "\u{1F4CB} Tools" });
+        this.diagBtn.addEventListener("click", () => this.toggleDiagnostics());
         this.nightBtn = toolbar.createEl("button", { cls: "ai-village-night-toggle", text: "\u{1F313} Auto" });
         this.nightBtn.addEventListener("click", () => {
           this.nightMode = this.nightMode === "auto" ? "day" : this.nightMode === "day" ? "night" : "auto";
@@ -1952,13 +3075,27 @@ var require_village_view = __commonJS({
           );
           this.applyNightMode();
         });
+        this.mobileBtn = toolbar.createEl("button", { cls: "ai-village-mobile-toggle", text: this.mobileMode ? "\u{1F4F1} Mobile" : "\u{1F5A5}\uFE0F Desktop" });
+        this.mobileBtn.addEventListener("click", async () => {
+          this.mobileMode = !this.mobileMode;
+          this.mobileBtn.setText(this.mobileMode ? "\u{1F4F1} Mobile" : "\u{1F5A5}\uFE0F Desktop");
+          this.applyMobileMode();
+          this.restartGameLoop();
+          if (this.plugin.settings) {
+            this.plugin.settings.mobileMode = this.mobileMode;
+            await this.plugin.saveSettings();
+          }
+        });
         const sceneWrap = container.createDiv({ cls: "ai-village-scene-wrap" });
+        this.sceneWrapEl = sceneWrap;
         this.sceneEl = sceneWrap.createDiv({ cls: "ai-village-scene" });
         if (this.plugin.villageMapUrl) {
           this.sceneEl.style.backgroundImage = `url("${this.plugin.villageMapUrl}")`;
         }
         this.nightOverlayEl = this.sceneEl.createDiv({ cls: "ai-village-night-overlay" });
         this.spriteLayerEl = this.sceneEl.createDiv({ cls: "ai-village-sprite-layer" });
+        this.diagPanel = container.createDiv({ cls: "ai-village-diag-panel" });
+        this.diagPanel.style.display = "none";
         for (const [key, b] of Object.entries(VILLAGE_BUILDINGS)) {
           const el = this.spriteLayerEl.createDiv({ cls: "ai-village-building" });
           el.style.left = `${b.x}%`;
@@ -1975,33 +3112,100 @@ var require_village_view = __commonJS({
         const tabRow = feedWrap.createDiv({ cls: "ai-village-feed-tabs" });
         this.chatterTab = tabRow.createDiv({ cls: "ai-village-feed-tab is-active", text: "Chatter" });
         this.consoleTab = tabRow.createDiv({ cls: "ai-village-feed-tab", text: "Console" });
+        this.subagentTab = tabRow.createDiv({ cls: "ai-village-feed-tab", text: "Agents" });
         const panelWrap = feedWrap.createDiv({ cls: "ai-village-feed-panel-wrap" });
         this.feedEl = panelWrap.createDiv({ cls: "ai-village-feed" });
         this.consoleEl = panelWrap.createDiv({ cls: "ai-village-feed ai-village-console" });
         this.consoleEl.style.display = "none";
+        this.subagentEl = panelWrap.createDiv({ cls: "ai-village-feed ai-village-subagent-list" });
+        this.subagentEl.style.display = "none";
         this.chatterTab.addEventListener("click", () => {
           this.chatterTab.addClass("is-active");
           this.consoleTab.removeClass("is-active");
+          this.subagentTab.removeClass("is-active");
           this.feedEl.style.display = "flex";
           this.consoleEl.style.display = "none";
+          this.subagentEl.style.display = "none";
         });
         this.consoleTab.addEventListener("click", () => {
           this.consoleTab.addClass("is-active");
           this.chatterTab.removeClass("is-active");
+          this.subagentTab.removeClass("is-active");
           this.feedEl.style.display = "none";
           this.consoleEl.style.display = "flex";
+          this.subagentEl.style.display = "none";
+        });
+        this.subagentTab.addEventListener("click", () => {
+          this.subagentTab.addClass("is-active");
+          this.chatterTab.removeClass("is-active");
+          this.consoleTab.removeClass("is-active");
+          this.subagentEl.style.display = "flex";
+          this.feedEl.style.display = "none";
+          this.consoleEl.style.display = "none";
+          this.renderSubagentList();
         });
         this.unsub = this.plugin.village.subscribe(() => this.sync());
         this.wanderInterval = window.setInterval(() => this.wanderTick(), 4200);
         this.tickInterval = window.setInterval(() => this.applyNightMode(), 6e4);
+        this.restartGameLoop();
         this.applyNightMode();
+        this.applyMobileMode();
+        this.setupTouchPanning();
         this.wanderTick();
         this.sync();
+      }
+      restartGameLoop() {
+        if (this.gameLoop) window.clearInterval(this.gameLoop);
+        const tickMs = this.mobileMode ? MOBILE_TICK_MS : VILLAGE_TICK_MS;
+        this.gameLoop = window.setInterval(() => this.gameTick(), tickMs);
+      }
+      applyMobileMode() {
+        if (!this.sceneEl) return;
+        this.sceneEl.toggleClass("mobile-mode", this.mobileMode);
+        const buildings = this.sceneEl.querySelectorAll(".ai-village-building-glow, .ai-village-building-smoke");
+        buildings.forEach((el) => el.style.display = this.mobileMode ? "none" : "");
+        this.spriteLayerEl.style.willChange = this.mobileMode ? "auto" : "transform";
+      }
+      setupTouchPanning() {
+        if (!this.sceneWrapEl) return;
+        this.sceneWrapEl.addEventListener("touchstart", (e) => {
+          if (e.touches.length === 1) {
+            this.touchStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+            this.isPanning = false;
+          }
+        }, { passive: true });
+        this.sceneWrapEl.addEventListener("touchmove", (e) => {
+          if (!this.touchStart || e.touches.length !== 1) return;
+          const dx = e.touches[0].clientX - this.touchStart.x;
+          const dy = e.touches[0].clientY - this.touchStart.y;
+          if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+            this.isPanning = true;
+            this.scenePan.x += dx * 0.5;
+            this.scenePan.y += dy * 0.5;
+            const maxPan = 200;
+            this.scenePan.x = Math.max(-maxPan, Math.min(maxPan, this.scenePan.x));
+            this.scenePan.y = Math.max(-maxPan, Math.min(maxPan, this.scenePan.y));
+            this.spriteLayerEl.style.transform = `translate(${this.scenePan.x}px, ${this.scenePan.y}px)`;
+          }
+        }, { passive: true });
+        this.sceneWrapEl.addEventListener("touchend", () => {
+          this.touchStart = null;
+          setTimeout(() => {
+            if (!this.isPanning) return;
+            this.isPanning = false;
+            this.spriteLayerEl.style.transition = "transform 0.3s ease-out";
+            this.spriteLayerEl.style.transform = "translate(0, 0)";
+            setTimeout(() => {
+              this.spriteLayerEl.style.transition = "";
+            }, 300);
+          }, 1e3);
+        });
       }
       async onClose() {
         if (this.unsub) this.unsub();
         if (this.wanderInterval) window.clearInterval(this.wanderInterval);
         if (this.tickInterval) window.clearInterval(this.tickInterval);
+        if (this.gameLoop) window.clearInterval(this.gameLoop);
         for (const t of this.meetingTimers.values()) clearTimeout(t);
       }
       isNight() {
@@ -2015,6 +3219,19 @@ var require_village_view = __commonJS({
         this.sceneEl.toggleClass("is-night", this.isNight());
         this.sync();
       }
+      getSeatPosition(prof, v2) {
+        if (v2.assignedSeat) {
+          const building = VILLAGE_BUILDINGS[prof.building];
+          if (building && building.seats) {
+            for (const seat of building.seats) {
+              if (`${prof.building}-${seat.x}-${seat.y}` === v2.assignedSeat) {
+                return { x: seat.x, y: seat.y };
+              }
+            }
+          }
+        }
+        return null;
+      }
       jitter(anchor, key) {
         let h = 0;
         for (let i = 0; i < key.length; i++) h = h * 31 + key.charCodeAt(i) >>> 0;
@@ -2025,18 +3242,71 @@ var require_village_view = __commonJS({
           y: Math.min(96, Math.max(4, anchor.y + Math.sin(angle) * radius + (Math.random() * 4 - 2)))
         };
       }
-      // A small, stable (non-random-per-frame) left/right offset so several villagers standing
-      // at the same doorway line up next to each other instead of rendering as one stacked
-      // sprite — used for "everyone walks inside and stands at the door" states like meetings.
       doorStagger(key) {
         let h = 0;
         for (let i = 0; i < key.length; i++) h = h * 31 + key.charCodeAt(i) >>> 0;
         return (h % 9 - 4) * 0.9;
       }
-      // Moves a villager's element to (x, y) in % coordinates and, if it has character art,
-      // updates the sprite frame to face the direction of travel.
+      gameTick() {
+        const village = this.plugin.village;
+        village.tickAnimations();
+        for (const [key, v2] of village.villagers) {
+          if (v2.status !== "walking") continue;
+          const el = this.villagerEls.get(key);
+          if (!el) continue;
+          const prof = VILLAGE_PROFESSIONS[v2.professionKey];
+          if (!prof || !prof.spriteDir) continue;
+          const curX = parseFloat(el.style.left);
+          const curY = parseFloat(el.style.top);
+          const prev = this.prevPositions.get(key);
+          if (prev && Number.isFinite(prev.x) && Number.isFinite(prev.y)) {
+            const dx = curX - prev.x;
+            const dy = curY - prev.y;
+            if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
+              const dir = villageDirectionFor(dx, dy);
+              if (dir) {
+                this.villagerFacing.set(key, dir);
+                const img = el.querySelector(".ai-village-villager-img");
+                if (img) img.src = this.plugin.getSpriteUrl(prof.spriteDir, dir);
+              }
+            }
+          }
+          this.prevPositions.set(key, { x: curX, y: curY });
+        }
+        this.syncBubbles();
+        if (this.subagentTab.hasClass("is-active")) {
+          this.renderSubagentList();
+        }
+        if (this.diagPanel.style.display !== "none") {
+          this.renderDiagnostics();
+        }
+      }
+      syncBubbles() {
+        const village = this.plugin.village;
+        const now = Date.now();
+        for (const [key, v2] of village.villagers) {
+          const el = this.villagerEls.get(key);
+          if (!el) continue;
+          const bubbleEl = el.querySelector(".ai-village-villager-bubble");
+          if (!bubbleEl) continue;
+          if (v2.bubble && (v2.bubble.expiresAt === 0 || now < v2.bubble.expiresAt)) {
+            bubbleEl.setText(`${v2.bubble.icon || ""} ${v2.bubble.text}`.trim());
+            bubbleEl.style.display = "block";
+            el.addClass("has-bubble");
+          } else if (!v2.bubble || now >= v2.bubble.expiresAt) {
+            if (v2.bubble && now >= v2.bubble.expiresAt && v2.bubble.expiresAt !== 0) {
+              village.clearBubble(key);
+            }
+            if (!this.chattingUntil.has(key)) {
+              bubbleEl.setText("");
+              bubbleEl.style.display = "";
+              el.removeClass("has-bubble");
+            }
+          }
+        }
+      }
       moveVillager(key, el, prof, x, y) {
-        if (prof.spriteDir) {
+        if (prof && prof.spriteDir) {
           const oldX = parseFloat(el.style.left);
           const oldY = parseFloat(el.style.top);
           const dir = Number.isFinite(oldX) && Number.isFinite(oldY) ? villageDirectionFor(x - oldX, y - oldY) : null;
@@ -2052,16 +3322,24 @@ var require_village_view = __commonJS({
       wanderTick() {
         const village = this.plugin.village;
         const night = this.isNight();
-        for (const [key, v] of village.villagers) {
+        const now = Date.now();
+        for (const [key, v2] of village.villagers) {
+          if (v2.isSubagent) continue;
           const el = this.villagerEls.get(key);
           if (!el) continue;
-          const isOut = v.status === "idle" || v.status === "finished" || v.status === "waiting" || v.status === "reviewing";
-          if (!isOut) {
+          const isOut = v2.status === "idle" || v2.status === "finished" || v2.status === "waiting" || v2.status === "reviewing";
+          const isWalking = v2.status === "walking";
+          if (!isOut && !isWalking) {
             this.wanderTargets.delete(key);
             continue;
           }
-          const prof = VILLAGE_PROFESSIONS[v.professionKey];
-          if (night && v.status === "idle") {
+          if (isWalking) {
+            this.wanderTargets.delete(key);
+            continue;
+          }
+          const prof = VILLAGE_PROFESSIONS[v2.professionKey];
+          if (!prof) continue;
+          if (night && v2.status === "idle") {
             const anchor = VILLAGE_BUILDINGS[prof.building];
             const curX2 = parseFloat(el.style.left);
             const curY2 = parseFloat(el.style.top);
@@ -2076,19 +3354,24 @@ var require_village_view = __commonJS({
           const curY = parseFloat(el.style.top);
           const arrived = !target || Math.abs(curX - target.x) < 2.5 && Math.abs(curY - target.y) < 2.5;
           if (arrived) {
+            if (v2.status === "idle" && now < v2.wanderPauseUntil) {
+              continue;
+            }
+            v2.wanderPauseUntil = now + 2500 + Math.random() * 3e3;
             target = this.pickWanderTarget(key, prof);
             this.wanderTargets.set(key, target);
           }
           this.moveVillager(key, el, prof, target.x, target.y);
-          if (v.status === "idle") {
+          if (v2.status === "idle") {
             const tagEl = el.querySelector(".ai-village-villager-tag");
-            if (tagEl) tagEl.setText(`${v.name} ${prof.idle[Math.floor(Math.random() * prof.idle.length)]}`);
+            if (tagEl) {
+              const idleLine = prof.idle[Math.floor(Math.random() * prof.idle.length)];
+              tagEl.setText(`${v2.name} ${idleLine}`);
+            }
           }
         }
         this.chatTick();
       }
-      // Mostly a free-roam point anywhere on the map; sometimes drifts back toward home/work
-      // so it still looks like a villager living there, not just wandering aimlessly forever.
       pickWanderTarget(key, prof) {
         if (Math.random() < 0.25) {
           const anchor = VILLAGE_BUILDINGS[prof.building];
@@ -2096,9 +3379,6 @@ var require_village_view = __commonJS({
         }
         return { x: 8 + Math.random() * 84, y: 8 + Math.random() * 84 };
       }
-      // Ambient life: when two idle villagers happen to be wandering near each other, they stop
-      // for a moment and chat — a speech bubble over each, plus a line in the feed. Each villager
-      // gets a cooldown afterward so the same two don't chat nonstop.
       chatTick() {
         const village = this.plugin.village;
         const night = this.isNight();
@@ -2116,8 +3396,9 @@ var require_village_view = __commonJS({
         }
         if (night) return;
         const candidates = [];
-        for (const [key, v] of village.villagers) {
-          if (v.status !== "idle") continue;
+        for (const [key, v2] of village.villagers) {
+          if (v2.isSubagent) continue;
+          if (v2.status !== "idle") continue;
           if (this.villagerHidden.has(key) || this.chattingUntil.has(key)) continue;
           if ((this.chatCooldown.get(key) || 0) > now) continue;
           const el = this.villagerEls.get(key);
@@ -2125,7 +3406,7 @@ var require_village_view = __commonJS({
           const x = parseFloat(el.style.left);
           const y = parseFloat(el.style.top);
           if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-          candidates.push({ key, v, x, y });
+          candidates.push({ key, v: v2, x, y });
         }
         for (let i = 0; i < candidates.length; i++) {
           const a = candidates[i];
@@ -2156,12 +3437,77 @@ var require_village_view = __commonJS({
         }
         this.plugin.village.say(a.key, `chats with ${b.v.name}: "${line}"`);
       }
-      ensureVillagerEl(key, v) {
+      toggleDiagnostics() {
+        if (this.diagPanel.style.display === "none") {
+          this.diagPanel.style.display = "block";
+          this.renderDiagnostics();
+        } else {
+          this.diagPanel.style.display = "none";
+        }
+      }
+      renderDiagnostics() {
+        const village = this.plugin.village;
+        this.diagPanel.empty();
+        const header = this.diagPanel.createDiv({ cls: "ai-village-diag-header", text: "Tool History" });
+        const closeBtn = header.createEl("span", { cls: "ai-village-diag-close", text: "\u2715" });
+        closeBtn.addEventListener("click", () => {
+          this.diagPanel.style.display = "none";
+        });
+        let hasEntries = false;
+        for (const [key, v2] of village.villagers) {
+          if (!v2.toolHistory || v2.toolHistory.length === 0) continue;
+          hasEntries = true;
+          const section = this.diagPanel.createDiv({ cls: "ai-village-diag-agent" });
+          section.createDiv({ cls: "ai-village-diag-agent-name", text: v2.name });
+          const list = section.createDiv({ cls: "ai-village-diag-list" });
+          const recent = v2.toolHistory.slice(-10);
+          for (const entry of recent) {
+            const row = list.createDiv({ cls: `ai-village-diag-entry ${entry.status === "error" ? "is-error" : ""}` });
+            const toolSpan = row.createSpan({ cls: "ai-village-diag-tool", text: entry.tool });
+            if (entry.args) {
+              row.createSpan({ cls: "ai-village-diag-args", text: ` ${entry.args}` });
+            }
+            if (entry.result) {
+              row.createSpan({ cls: "ai-village-diag-result", text: ` \u2192 ${entry.result}` });
+            }
+            if (entry.status === "error") row.addClass("is-error");
+          }
+        }
+        if (!hasEntries) {
+          this.diagPanel.createDiv({ cls: "ai-village-diag-empty", text: "No tool calls yet \u2014 run an agent to see its activity." });
+        }
+      }
+      renderSubagentList() {
+        const village = this.plugin.village;
+        this.subagentEl.empty();
+        const agents = Array.from(village.villagers.values());
+        if (agents.length === 0) {
+          this.subagentEl.createDiv({ cls: "ai-village-agent-row", text: "No agents in the village." });
+          return;
+        }
+        for (const v2 of agents) {
+          const row = this.subagentEl.createDiv({ cls: `ai-village-agent-row ${v2.isSubagent ? "is-subagent" : ""}` });
+          const prof = VILLAGE_PROFESSIONS[v2.professionKey];
+          const emoji = prof ? prof.emoji : "\u{1F464}";
+          const badge = v2.isSubagent ? "\u22B6 " : "";
+          const parentInfo = v2.isSubagent && v2.parentKey ? ` (for ${village.villagers.get(v2.parentKey)?.name || v2.parentKey})` : "";
+          row.createSpan({ cls: "ai-village-agent-emoji", text: `${badge}${emoji}` });
+          row.createSpan({ cls: "ai-village-agent-name", text: `${v2.name}${parentInfo}` });
+          const statusSpan = row.createSpan({ cls: "ai-village-agent-status", text: ` ${v2.status}${v2.subStatus ? `:${v2.subStatus}` : ""}` });
+          if (v2.status === "error") statusSpan.addClass("is-error");
+          else if (v2.status === "finished") statusSpan.addClass("is-finished");
+          if (v2.taskText) {
+            row.createSpan({ cls: "ai-village-agent-task", text: ` "${v2.taskText.slice(0, 60)}"` });
+          }
+        }
+      }
+      ensureVillagerEl(key, v2) {
         let el = this.villagerEls.get(key);
         if (el) return el;
-        const prof = VILLAGE_PROFESSIONS[v.professionKey];
-        el = this.spriteLayerEl.createDiv({ cls: "ai-village-villager" });
-        if (prof.spriteDir) {
+        const prof = VILLAGE_PROFESSIONS[v2.professionKey];
+        const isSub = v2.isSubagent;
+        el = this.spriteLayerEl.createDiv({ cls: `ai-village-villager ${isSub ? "is-subagent" : ""}` });
+        if (prof && prof.spriteDir && !isSub) {
           const sprite = el.createDiv({ cls: "ai-village-villager-sprite" });
           const img = sprite.createEl("img", { cls: "ai-village-villager-img" });
           const markFailed = () => {
@@ -2181,15 +3527,56 @@ var require_village_view = __commonJS({
           this.villagerFacing.set(key, "south");
           el.createDiv({ cls: "ai-village-villager-badge ai-village-villager-fallback-badge", text: prof.emoji });
         } else {
-          el.createDiv({ cls: "ai-village-villager-badge", text: prof.emoji });
+          const badgeText = isSub ? "\u25C8" : prof ? prof.emoji : "\u{1F464}";
+          el.createDiv({ cls: `ai-village-villager-badge ${isSub ? "is-subagent-badge" : ""}`, text: badgeText });
         }
         el.createDiv({ cls: "ai-village-villager-mood", text: "\u{1F642}" });
-        el.createDiv({ cls: "ai-village-villager-bubble" });
-        el.createDiv({ cls: "ai-village-villager-tag", text: v.name });
-        const anchor = VILLAGE_BUILDINGS[prof.building];
-        const pos = this.jitter(anchor, key);
+        const bubbleEl = el.createDiv({ cls: "ai-village-villager-bubble" });
+        bubbleEl.style.display = "none";
+        el.createDiv({ cls: "ai-village-villager-tag", text: v2.name });
+        el.createDiv({ cls: "ai-village-villager-activity" });
+        el.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const v3 = this.plugin.village.villagers.get(key);
+          if (v3 && v3.bubble && v3.bubble.text) {
+            bubbleEl.setText(`${v3.bubble.icon || ""} ${v3.bubble.text}`.trim());
+            bubbleEl.style.display = "block";
+            el.addClass("has-bubble");
+            setTimeout(() => {
+              bubbleEl.style.display = "none";
+              el.removeClass("has-bubble");
+            }, 3e3);
+          }
+        }, { passive: true });
+        let touchTimer = null;
+        el.addEventListener("touchstart", (e) => {
+          touchTimer = setTimeout(() => {
+            const v3 = this.plugin.village.villagers.get(key);
+            if (v3 && v3.bubble && v3.bubble.text) {
+              bubbleEl.setText(`${v3.bubble.icon || ""} ${v3.bubble.text}`.trim());
+              bubbleEl.style.display = "block";
+              el.addClass("has-bubble");
+              setTimeout(() => {
+                bubbleEl.style.display = "none";
+                el.removeClass("has-bubble");
+              }, 3e3);
+            }
+          }, 500);
+        }, { passive: true });
+        el.addEventListener("touchend", () => {
+          if (touchTimer) clearTimeout(touchTimer);
+        }, { passive: true });
+        el.addEventListener("touchmove", () => {
+          if (touchTimer) clearTimeout(touchTimer);
+        }, { passive: true });
+        const anchor = prof ? VILLAGE_BUILDINGS[prof.building] : { x: 50, y: 50 };
+        const pos = prof ? this.jitter(anchor, key) : { x: 20 + Math.random() * 60, y: 20 + Math.random() * 60 };
         el.style.left = `${pos.x}%`;
         el.style.top = `${pos.y}%`;
+        if (isSub) {
+          el.style.transform = "translate(-50%, -50%) scale(0.7)";
+          el.style.opacity = "0.85";
+        }
         this.spriteLayerEl.appendChild(el);
         this.villagerEls.set(key, el);
         return el;
@@ -2204,18 +3591,19 @@ var require_village_view = __commonJS({
           collaboratingKeys.add(m.toKey);
         }
         const buildingStatus = /* @__PURE__ */ new Map();
-        for (const [key, v] of village.villagers) {
-          const el = this.ensureVillagerEl(key, v);
-          const prof = VILLAGE_PROFESSIONS[v.professionKey];
-          if (v.status !== "idle" && this.chattingUntil.has(key)) {
+        for (const [key, v2] of village.villagers) {
+          const el = this.ensureVillagerEl(key, v2);
+          const prof = VILLAGE_PROFESSIONS[v2.professionKey];
+          if (v2.status !== "idle" && this.chattingUntil.has(key)) {
             this.chattingUntil.delete(key);
             el.removeClass("is-chatting");
             const bubble = el.querySelector(".ai-village-villager-bubble");
             if (bubble) bubble.setText("");
           }
-          el.className = `ai-village-villager status-${v.status}`;
+          el.className = `ai-village-villager status-${v2.status}`;
+          if (v2.isSubagent) el.addClass("is-subagent");
           el.toggleClass("sprite-failed", this.spriteFailed.has(key));
-          const sleeping = night && v.status === "idle";
+          const sleeping = night && v2.status === "idle";
           const collaborating = collaboratingKeys.has(key);
           const chatting = this.chattingUntil.has(key);
           el.toggleClass("is-sleeping", sleeping);
@@ -2223,25 +3611,55 @@ var require_village_view = __commonJS({
           el.toggleClass("is-hidden", this.villagerHidden.has(key));
           el.toggleClass("is-chatting", chatting);
           el.querySelector(".ai-village-villager-mood").setText(
-            villageMoodIcon(v.status, sleeping ? "sleeping" : chatting ? "chatting" : collaborating ? "collaborating" : null)
+            villageMoodIcon(v2.status, v2.subStatus, sleeping ? "sleeping" : chatting ? "chatting" : collaborating ? "collaborating" : null)
           );
           const tagEl = el.querySelector(".ai-village-villager-tag");
-          if (v.status === "working" || v.status === "reviewing" || v.status === "waiting" || v.status === "error") {
-            tagEl.setText(v.taskText ? `${v.name}: ${v.taskText}` : v.name);
-          } else if (v.status === "meeting") {
-            tagEl.setText(v.taskText ? `${v.name}: ${v.taskText}` : `${v.name} at the Town Hall`);
-          } else if (v.status === "finished") {
-            tagEl.setText(`${v.name} \u2713 ${v.taskText || "done"}`);
+          if (v2.isSubagent) {
+            tagEl.setText(`[sub] ${v2.taskText || v2.name}`);
+          } else if (v2.status === "walking") {
+            tagEl.setText(`${v2.name} is on the move`);
+          } else if (v2.status === "working" || v2.status === "reviewing" || v2.status === "waiting" || v2.status === "error") {
+            tagEl.setText(v2.taskText ? `${v2.name}: ${v2.taskText}` : v2.name);
+          } else if (v2.status === "meeting") {
+            tagEl.setText(v2.taskText ? `${v2.name}: ${v2.taskText}` : `${v2.name} at the Town Hall`);
+          } else if (v2.status === "finished") {
+            tagEl.setText(`${v2.name} \u2713 ${v2.taskText || "done"}`);
           } else if (sleeping) {
-            tagEl.setText(`${v.name} is asleep`);
+            tagEl.setText(`${v2.name} is asleep`);
           } else {
-            tagEl.setText(v.name);
+            tagEl.setText(v2.name);
+          }
+          const activityEl = el.querySelector(".ai-village-villager-activity");
+          if (v2.subStatus === "reading") {
+            activityEl.setText("\u{1F4D6}");
+            el.addClass("is-reading");
+            el.removeClass("is-writing");
+            el.style.transition = "left 3.6s ease-in-out, top 3.6s ease-in-out, opacity 0.5s ease";
+          } else if (v2.subStatus === "writing") {
+            activityEl.setText("\u270D\uFE0F");
+            el.addClass("is-writing");
+            el.removeClass("is-reading");
+            el.style.transition = "left 3.6s ease-in-out, top 3.6s ease-in-out, opacity 0.5s ease";
+          } else {
+            activityEl.setText("");
+            el.removeClass("is-reading is-writing");
           }
           const prevStatus = this.prevStatus.get(key);
-          if (v.status === "working" || v.status === "error") {
-            const anchor = VILLAGE_BUILDINGS[prof.building];
-            this.moveVillager(key, el, prof, anchor.x, anchor.y + 3);
-          } else if (v.status === "meeting") {
+          if (v2.status === "walking") {
+            el.style.transition = "left 1.2s ease-in-out, top 1.2s ease-in-out, opacity 0.5s ease";
+            if (v2.walkTarget) {
+              this.moveVillager(key, el, prof, v2.walkTarget.x, v2.walkTarget.y);
+            }
+          } else if ((v2.status === "working" || v2.status === "error") && !v2.isSubagent) {
+            el.style.transition = "left 0.9s ease, top 0.9s ease, opacity 0.5s ease";
+            let pos = null;
+            if (prof) pos = this.getSeatPosition(prof, v2);
+            if (!pos) {
+              const anchor = prof ? VILLAGE_BUILDINGS[prof.building] : { x: 50, y: 50 };
+              pos = { x: anchor.x, y: anchor.y + 3 };
+            }
+            this.moveVillager(key, el, prof, pos.x, pos.y);
+          } else if (v2.status === "meeting") {
             if (prevStatus !== "meeting") {
               const anchor = VILLAGE_BUILDINGS.townhall;
               this.moveVillager(key, el, prof, anchor.x + this.doorStagger(key), anchor.y + 3);
@@ -2258,21 +3676,25 @@ var require_village_view = __commonJS({
             clearTimeout(this.meetingTimers.get(key));
             this.villagerHidden.delete(key);
             el.removeClass("is-hidden");
-            const anchor = VILLAGE_BUILDINGS[prof.building];
-            const homeTimer = window.setTimeout(() => {
-              this.moveVillager(key, el, prof, anchor.x, anchor.y + 3);
-            }, 650);
-            this.meetingTimers.set(key, homeTimer);
+            if (prof) {
+              const anchor = VILLAGE_BUILDINGS[prof.building];
+              const homeTimer = window.setTimeout(() => {
+                this.moveVillager(key, el, prof, anchor.x, anchor.y + 3);
+              }, 650);
+              this.meetingTimers.set(key, homeTimer);
+            }
           }
-          this.prevStatus.set(key, v.status);
-          const bKey = v.status === "meeting" ? "townhall" : prof.building;
-          const rank = VILLAGE_STATUS_PRIORITY.indexOf(v.status);
-          const cur = buildingStatus.get(bKey);
-          if (cur === void 0 || rank < VILLAGE_STATUS_PRIORITY.indexOf(cur)) {
-            buildingStatus.set(bKey, v.status);
+          this.prevStatus.set(key, v2.status);
+          const bKey = v2.status === "meeting" ? "townhall" : prof ? prof.building : null;
+          if (bKey) {
+            const rank = VILLAGE_STATUS_PRIORITY.indexOf(v2.status);
+            const cur = buildingStatus.get(bKey);
+            if (cur === void 0 || rank < VILLAGE_STATUS_PRIORITY.indexOf(cur)) {
+              buildingStatus.set(bKey, v2.status);
+            }
           }
         }
-        const activeCount = Array.from(village.villagers.values()).filter((v) => v.status === "working").length;
+        const activeCount = Array.from(village.villagers.values()).filter((v2) => v2.status === "working" && !v2.isSubagent).length;
         this.sceneEl.toggleClass("is-busy", activeCount >= 3);
         for (const [key, el] of this.buildingEls) {
           const status = buildingStatus.get(key);
@@ -2284,8 +3706,8 @@ var require_village_view = __commonJS({
           if (!this.messengerEls.has(m.id)) {
             const fromProf = VILLAGE_PROFESSIONS[village.villagers.get(m.fromKey)?.professionKey || "mayor"];
             const toProf = VILLAGE_PROFESSIONS[village.villagers.get(m.toKey)?.professionKey || "mayor"];
-            const fromB = VILLAGE_BUILDINGS[fromProf.building];
-            const toB = VILLAGE_BUILDINGS[toProf.building];
+            const fromB = fromProf ? VILLAGE_BUILDINGS[fromProf.building] : { x: 50, y: 50 };
+            const toB = toProf ? VILLAGE_BUILDINGS[toProf.building] : { x: 50, y: 50 };
             const el = this.spriteLayerEl.createDiv({ cls: "ai-village-messenger", text: "\u{1F4DC}" });
             el.style.left = `${fromB.x}%`;
             el.style.top = `${fromB.y}%`;
@@ -2522,6 +3944,23 @@ var require_settings_tab = __commonJS({
             this.plugin.activateVillageView();
           });
         });
+        new Setting(containerEl).setName("Notification sound").setDesc('Play a chime when an agent finishes a task or needs approval. On mobile, tap "Test Sound" first to unlock audio.').addButton((btn) => {
+          btn.setButtonText("\u{1F50A} Test Sound").onClick(() => {
+            this.plugin.playNotificationSound();
+          });
+        });
+        new Setting(containerEl).setName("Mobile mode").setDesc("Reduces animations and lowers refresh rate for better battery life on Android/iOS.").addToggle((toggle) => {
+          toggle.setValue(this.plugin.settings.mobileMode || false);
+          toggle.onChange(async (value) => {
+            this.plugin.settings.mobileMode = value;
+            await this.plugin.saveSettings();
+            if (this.plugin.villageView) {
+              this.plugin.villageView.mobileMode = value;
+              this.plugin.villageView.applyMobileMode();
+              this.plugin.villageView.restartGameLoop();
+            }
+          });
+        });
         containerEl.createEl("h3", { text: "AI Agent" });
         containerEl.createEl("p", {
           text: "The agent works through multi-step goals on its own \u2014 reading, searching, writing, tagging, moving, renaming, deleting \u2014 but by default it pauses and waits for your approval before any actual file change, and you can edit the details (new content, tags, path) right in the approval prompt before confirming. Deleting only ever moves a note to the trash, never a permanent delete.",
@@ -2679,6 +4118,26 @@ var require_settings_tab = __commonJS({
             await this.plugin.saveSettings();
           });
         });
+        new Setting(box).setName("Max output tokens").setDesc("Maximum tokens per response. Default: 8192.").addText((text) => {
+          text.setValue(String(provider.maxTokens || 8192));
+          text.onChange(async (value) => {
+            const n = parseInt(value, 10);
+            if (!isNaN(n) && n > 0) {
+              provider.maxTokens = n;
+              await this.plugin.saveSettings();
+            }
+          });
+        });
+        new Setting(box).setName("Request timeout (ms)").setDesc("Timeout in milliseconds. Default: 120000 (2 min).").addText((text) => {
+          text.setValue(String(provider.timeoutMs || 12e4));
+          text.onChange(async (value) => {
+            const n = parseInt(value, 10);
+            if (!isNaN(n) && n > 0) {
+              provider.timeoutMs = n;
+              await this.plugin.saveSettings();
+            }
+          });
+        });
         if (this.plugin.settings.providers.length > 1) {
           new Setting(box).addButton((btn) => {
             btn.setButtonText("Remove provider").setWarning().onClick(async () => {
@@ -2758,8 +4217,197 @@ var require_settings_tab = __commonJS({
   }
 });
 
+// src/ui/agent-status-bar.js
+var require_agent_status_bar = __commonJS({
+  "src/ui/agent-status-bar.js"(exports2, module2) {
+    "use strict";
+    var { VILLAGE_PROFESSIONS } = require_village_roster();
+    var AgentStatusBar2 = class {
+      constructor(plugin) {
+        this.plugin = plugin;
+        this.containerEl = null;
+        this.isExpanded = false;
+        this.updateInterval = null;
+      }
+      create(container) {
+        this.containerEl = container.createDiv({ cls: "ai-agent-status-bar" });
+        this.containerEl.innerHTML = `
+      <div class="ai-agent-status-bar-inner">
+        <span class="ai-agent-status-bar-label">Agents</span>
+        <div class="ai-agent-status-bar-items"></div>
+        <button class="ai-agent-status-bar-toggle" aria-label="Expand agent status">\u25BC</button>
+      </div>
+      <div class="ai-agent-status-bar-expanded" style="display: none;">
+        <div class="ai-agent-status-bar-expanded-header">
+          <span>Active Agents</span>
+          <button class="ai-agent-status-bar-close">\xD7</button>
+        </div>
+        <div class="ai-agent-status-bar-expanded-list"></div>
+      </div>
+    `;
+        const toggleBtn = this.containerEl.querySelector(".ai-agent-status-bar-toggle");
+        const closeBtn = this.containerEl.querySelector(".ai-agent-status-bar-close");
+        const expandedEl = this.containerEl.querySelector(".ai-agent-status-bar-expanded");
+        toggleBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.toggleExpand();
+        });
+        closeBtn.addEventListener("click", () => {
+          this.collapse();
+        });
+        document.addEventListener("click", (e) => {
+          if (this.isExpanded && !this.containerEl.contains(e.target)) {
+            this.collapse();
+          }
+        });
+        this.startUpdates();
+        return this.containerEl;
+      }
+      toggleExpand() {
+        this.isExpanded = !this.isExpanded;
+        const expandedEl = this.containerEl.querySelector(".ai-agent-status-bar-expanded");
+        const toggleBtn = this.containerEl.querySelector(".ai-agent-status-bar-toggle");
+        expandedEl.style.display = this.isExpanded ? "block" : "none";
+        toggleBtn.textContent = this.isExpanded ? "\u25B2" : "\u25BC";
+        if (this.isExpanded) {
+          this.renderExpanded();
+        }
+      }
+      collapse() {
+        this.isExpanded = false;
+        const expandedEl = this.containerEl.querySelector(".ai-agent-status-bar-expanded");
+        const toggleBtn = this.containerEl.querySelector(".ai-agent-status-bar-toggle");
+        expandedEl.style.display = "none";
+        toggleBtn.textContent = "\u25BC";
+      }
+      startUpdates() {
+        this.update();
+        this.updateInterval = window.setInterval(() => this.update(), 2e3);
+      }
+      stopUpdates() {
+        if (this.updateInterval) {
+          window.clearInterval(this.updateInterval);
+          this.updateInterval = null;
+        }
+      }
+      update() {
+        const village = this.plugin.village;
+        if (!village) return;
+        const agents = Array.from(village.villagers.values()).filter((v2) => !v2.isSubagent).filter((v2) => v2.status !== "idle" || v2.subStatus);
+        const itemsEl = this.containerEl.querySelector(".ai-agent-status-bar-items");
+        if (!itemsEl) return;
+        if (agents.length === 0) {
+          itemsEl.innerHTML = '<span class="ai-agent-status-bar-idle">All idle</span>';
+          return;
+        }
+        itemsEl.innerHTML = agents.map((v2) => {
+          const prof = VILLAGE_PROFESSIONS[v2.professionKey];
+          const emoji = prof ? prof.emoji : "\u{1F464}";
+          const statusIcon = this.getStatusIcon(v2.status, v2.subStatus);
+          const isWaiting = v2.status === "waiting" || v2.status === "error";
+          return `
+        <span class="ai-agent-status-bar-agent ${isWaiting ? "needs-attention" : ""}" 
+              data-key="${v2.key}"
+              title="${v2.name}: ${v2.status}${v2.subStatus ? ":" + v2.subStatus : ""}${v2.taskText ? " - " + v2.taskText.slice(0, 40) : ""}">
+          ${emoji} ${statusIcon} ${v2.name}
+        </span>
+      `;
+        }).join("");
+        itemsEl.querySelectorAll(".ai-agent-status-bar-agent").forEach((el) => {
+          el.addEventListener("click", () => {
+            const key = el.dataset.key;
+            this.showAgentDetails(key);
+          });
+        });
+      }
+      getStatusIcon(status, subStatus) {
+        switch (status) {
+          case "working":
+            return subStatus === "reading" ? "\u{1F4D6}" : subStatus === "writing" ? "\u270D\uFE0F" : "\u2699\uFE0F";
+          case "meeting":
+            return "\u{1F5E3}\uFE0F";
+          case "reviewing":
+            return "\u{1F4AD}";
+          case "waiting":
+            return "\u231B";
+          case "finished":
+            return "\u2728";
+          case "error":
+            return "\u26A0\uFE0F";
+          case "walking":
+            return "\u{1F6B6}";
+          default:
+            return "\u{1F642}";
+        }
+      }
+      renderExpanded() {
+        const village = this.plugin.village;
+        if (!village) return;
+        const agents = Array.from(village.villagers.values()).filter((v2) => !v2.isSubagent);
+        const listEl = this.containerEl.querySelector(".ai-agent-status-bar-expanded-list");
+        if (!listEl) return;
+        listEl.innerHTML = agents.map((v2) => {
+          const prof = VILLAGE_PROFESSIONS[v2.professionKey];
+          const emoji = prof ? prof.emoji : "\u{1F464}";
+          const statusIcon = this.getStatusIcon(v2.status, v2.subStatus);
+          const isWaiting = v2.status === "waiting" || v2.status === "error";
+          return `
+        <div class="ai-agent-status-bar-expanded-item ${isWaiting ? "needs-attention" : ""}" data-key="${v2.key}">
+          <div class="ai-agent-status-bar-expanded-main">
+            <span class="ai-agent-status-bar-expanded-emoji">${emoji}</span>
+            <span class="ai-agent-status-bar-expanded-name">${v2.name}</span>
+            <span class="ai-agent-status-bar-expanded-status">${statusIcon} ${v2.status}${v2.subStatus ? ":" + v2.subStatus : ""}</span>
+          </div>
+          ${v2.taskText ? `<div class="ai-agent-status-bar-expanded-task">${v2.taskText.slice(0, 80)}</div>` : ""}
+        </div>
+      `;
+        }).join("");
+        listEl.querySelectorAll(".ai-agent-status-bar-expanded-item").forEach((el) => {
+          el.addEventListener("click", () => {
+            const key = el.dataset.key;
+            this.showAgentDetails(key);
+          });
+        });
+      }
+      showAgentDetails(key) {
+        const village = this.plugin.village;
+        const v2 = village?.villagers.get(key);
+        if (!v2) return;
+        const toast = document.createElement("div");
+        toast.className = "ai-agent-status-bar-toast";
+        toast.innerHTML = `
+      <div class="ai-agent-status-bar-toast-content">
+        <div class="ai-agent-status-bar-toast-header">
+          <span>${VILLAGE_PROFESSIONS[v2.professionKey]?.emoji || "\u{1F464}"} ${v2.name}</span>
+          <button class="ai-agent-status-bar-toast-close">\xD7</button>
+        </div>
+        <div class="ai-agent-status-bar-toast-body">
+          <div><strong>Status:</strong> ${v2.status}${v2.subStatus ? ":" + v2.subStatus : ""}</div>
+          ${v2.taskText ? `<div><strong>Task:</strong> ${v2.taskText}</div>` : ""}
+          ${v2.bubble ? `<div><strong>Message:</strong> ${v2.bubble.icon || ""} ${v2.bubble.text}</div>` : ""}
+        </div>
+      </div>
+    `;
+        document.body.appendChild(toast);
+        toast.querySelector(".ai-agent-status-bar-toast-close").addEventListener("click", () => toast.remove());
+        toast.addEventListener("click", (e) => {
+          if (e.target === toast) toast.remove();
+        });
+        setTimeout(() => toast.remove(), 5e3);
+      }
+      destroy() {
+        this.stopUpdates();
+        if (this.containerEl) {
+          this.containerEl.remove();
+        }
+      }
+    };
+    module2.exports = { AgentStatusBar: AgentStatusBar2 };
+  }
+});
+
 // src/core/plugin.js
-var { Plugin } = require("obsidian");
+var { Plugin, MarkdownRenderer, Component } = require("obsidian");
 var {
   VIEW_TYPE_AI_CHAT,
   VIEW_TYPE_AI_AGENT,
@@ -2774,15 +4422,27 @@ var { runAgentTool } = require_vault_tools();
 var { applyOrganizeAction } = require_vault_mutations();
 var { requestOrganizePlan } = require_organize();
 var { VillageStore } = require_village_store();
+var { EventBus } = require_event_bus();
+var { MemoryManager } = require_memory_manager();
 var { AIChatView } = require_chat_view();
 var { AgentView } = require_agent_view();
 var { VillageView } = require_village_view();
 var { OrganizeModal } = require_organize_modal();
 var { AIChatSettingTab } = require_settings_tab();
+var { AgentStatusBar } = require_agent_status_bar();
 module.exports = class AIChatSidebarPlugin extends Plugin {
   async onload() {
     await this.loadSettings();
+    this.eventBus = new EventBus();
+    this.memory = new MemoryManager({ shortTermLimit: 50 });
     this.village = new VillageStore(this);
+    if (this.settings.villageState) {
+      try {
+        this.village.fromJSON(this.settings.villageState);
+      } catch (e) {
+      }
+    }
+    this.village.subscribe(() => this._debouncedSaveVillage());
     try {
       this._pluginDir = this.manifest.dir || `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
       this.villageMapUrl = await this._resolvePluginResource(
@@ -2795,6 +4455,10 @@ module.exports = class AIChatSidebarPlugin extends Plugin {
     }
     this._spriteUrlCache = /* @__PURE__ */ new Map();
     this._dataUrlCache = /* @__PURE__ */ new Map();
+    this._villageSaveTimer = null;
+    this._markdownComponent = new Component();
+    this._audioContext = null;
+    this._notificationSound = null;
     this.registerView(VIEW_TYPE_AI_CHAT, (leaf) => new AIChatView(leaf, this));
     this.registerView(VIEW_TYPE_AI_AGENT, (leaf) => new AgentView(leaf, this));
     this.registerView(VIEW_TYPE_AI_VILLAGE, (leaf) => new VillageView(leaf, this));
@@ -2828,11 +4492,78 @@ module.exports = class AIChatSidebarPlugin extends Plugin {
       callback: () => new OrganizeModal(this.app, this).open()
     });
     this.addSettingTab(new AIChatSettingTab(this.app, this));
+    this.agentStatusBar = new AgentStatusBar(this);
+    const statusBarContainer = this.app.workspace.containerEl.createDiv({ cls: "ai-agent-status-bar" });
+    this.agentStatusBar.create(statusBarContainer);
+    this._statusBarContainer = statusBarContainer;
+    if (this.isMobile()) {
+      statusBarContainer.addClass("visible");
+    }
+    this._villageStatusSub = this.village.subscribe(() => this.updateStatusBarVisibility());
+    this.updateStatusBarVisibility();
+  }
+  isMobile() {
+    return /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || navigator.maxTouchPoints && navigator.maxTouchPoints > 1 && /MacIntel/.test(navigator.platform);
+  }
+  updateStatusBarVisibility() {
+    if (!this._statusBarContainer) return;
+    const hasActiveAgents = Array.from(this.village.villagers.values()).some(
+      (v2) => !v2.isSubagent && v2.status !== "idle"
+    );
+    const shouldShow = this.isMobile() || hasActiveAgents;
+    this._statusBarContainer.toggleClass("visible", shouldShow);
+  }
+  _debouncedSaveVillage() {
+    clearTimeout(this._villageSaveTimer);
+    this._villageSaveTimer = setTimeout(() => {
+      this.settings.villageState = this.village.toJSON();
+      this.saveSettings();
+    }, 2e3);
+  }
+  // Initialize audio context and load notification sound
+  async _initAudio() {
+    if (this._audioContext) return;
+    try {
+      this._audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const sampleRate = this._audioContext.sampleRate;
+      const duration = 0.3;
+      const samples = Math.floor(sampleRate * duration);
+      const buffer = this._audioContext.createBuffer(1, samples, sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < samples; i++) {
+        const t = i / sampleRate;
+        data[i] = Math.sin(2 * Math.PI * 880 * t) * Math.exp(-t * 15) * 0.3;
+      }
+      this._notificationSound = buffer;
+    } catch (e) {
+      console.warn("Audio initialization failed:", e);
+    }
+  }
+  // Play notification chime (unlocks audio on first user interaction)
+  async playNotificationSound() {
+    await this._initAudio();
+    if (!this._audioContext || !this._notificationSound) return;
+    if (this._audioContext.state === "suspended") {
+      await this._audioContext.resume();
+    }
+    const source = this._audioContext.createBufferSource();
+    source.buffer = this._notificationSound;
+    source.connect(this._audioContext.destination);
+    source.start();
   }
   onunload() {
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_AI_CHAT);
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_AI_AGENT);
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_AI_VILLAGE);
+    if (this.agentStatusBar) {
+      this.agentStatusBar.destroy();
+    }
+    if (this._villageStatusSub) {
+      this._villageStatusSub();
+    }
+    if (this._statusBarContainer) {
+      this._statusBarContainer.remove();
+    }
   }
   async activateView() {
     const { workspace } = this.app;
@@ -2916,6 +4647,15 @@ module.exports = class AIChatSidebarPlugin extends Plugin {
     const provider = this.getActiveProvider();
     const systemText = [CHAT_NO_TOOLS_SYSTEM_NOTE, this.settings.systemPrompt].filter(Boolean).join("\n\n");
     return await providers.sendMessage(messages, provider, systemText);
+  }
+  async sendStreamMessage(messages, onDelta, signal) {
+    const provider = this.getActiveProvider();
+    const systemText = [CHAT_NO_TOOLS_SYSTEM_NOTE, this.settings.systemPrompt].filter(Boolean).join("\n\n");
+    return await providers.streamMessage(messages, provider, systemText, onDelta, signal);
+  }
+  renderMarkdown(el, markdown) {
+    el.empty();
+    MarkdownRenderer.render(this.app, markdown, el, "/", this._markdownComponent);
   }
   // --- Organize feature: gather vault info, ask AI for a plan, never execute anything itself ---
   async requestOrganizePlan() {

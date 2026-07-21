@@ -150,6 +150,10 @@ class VillageStore {
     this.log(status === 'error' ? 'error' : status === 'waiting' ? 'warn' : 'log', `${v.name} ${statusLabel}${opts.taskText ? ': ' + opts.taskText : ''}`);
 
     if (status === 'finished' || status === 'error') {
+      // Play notification sound
+      if (this.plugin && this.plugin.playNotificationSound) {
+        this.plugin.playNotificationSound().catch(() => {});
+      }
       const t = setTimeout(() => {
         if (this.villagers.get(key)?.status === status) {
           this.setStatus(key, 'idle', { taskText: '' });
@@ -279,6 +283,56 @@ class VillageStore {
       this._emit();
     }, 2600);
     return id;
+  }
+
+  toJSON() {
+    const villagers = {};
+    for (const [key, v] of this.villagers) {
+      villagers[key] = {
+        name: v.name,
+        professionKey: v.professionKey,
+        status: v.status,
+        subStatus: v.subStatus,
+        mood: v.mood,
+        taskText: v.taskText,
+        facing: v.facing,
+        assignedSeat: v.assignedSeat,
+        isSubagent: v.isSubagent || false,
+        parentKey: v.parentKey || null,
+        toolHistory: v.toolHistory.slice(-10),
+      };
+    }
+    return { villagers, seatAssignments: Array.from(this._seatAssignments.entries()).map(([bk, s]) => [bk, Array.from(s)]) };
+  }
+
+  fromJSON(data) {
+    if (!data || !data.villagers) return;
+    for (const [key, v] of Object.entries(data.villagers)) {
+      this.villagers.set(key, {
+        key,
+        name: v.name,
+        professionKey: v.professionKey,
+        status: 'idle',
+        subStatus: null,
+        mood: 'happy',
+        taskText: '',
+        bubble: null,
+        facing: v.facing || 'south',
+        walkTarget: null,
+        wanderPauseUntil: 0,
+        assignedSeat: v.assignedSeat || null,
+        toolHistory: v.toolHistory || [],
+        isSubagent: v.isSubagent || false,
+        parentKey: v.parentKey || null,
+        updatedAt: Date.now(),
+      });
+    }
+    if (data.seatAssignments) {
+      for (const [bk, keys] of data.seatAssignments) {
+        this._seatAssignments.set(bk, new Set(keys));
+      }
+    }
+    this._emit();
   }
 }
 

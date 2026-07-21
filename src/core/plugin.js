@@ -1,6 +1,6 @@
 'use strict';
 
-const { Plugin } = require('obsidian');
+const { Plugin, MarkdownRenderer, Component } = require('obsidian');
 
 const {
   VIEW_TYPE_AI_CHAT,
@@ -17,12 +17,15 @@ const { runAgentTool } = require('../tools/vault-tools');
 const { applyOrganizeAction } = require('../tools/vault-mutations');
 const { requestOrganizePlan } = require('../workflow/organize');
 const { VillageStore } = require('../village/village-store');
+const { EventBus } = require('./event-bus');
+const { MemoryManager } = require('../memory/memory-manager');
 
 const { AIChatView } = require('../ui/chat-view');
 const { AgentView } = require('../ui/agent-view');
 const { VillageView } = require('../ui/village-view');
 const { OrganizeModal } = require('../ui/organize-modal');
 const { AIChatSettingTab } = require('../ui/settings-tab');
+const { AgentStatusBar } = require('../ui/agent-status-bar');
 
 /**
  * Plugin entry point. Owns settings persistence, view registration/activation, and the
@@ -34,9 +37,15 @@ module.exports = class AIChatSidebarPlugin extends Plugin {
   async onload() {
     await this.loadSettings();
 
+    this.eventBus = new EventBus();
+    this.memory = new MemoryManager({ shortTermLimit: 50 });
+
     this.village = new VillageStore(this);
-    // village-map.jpg ships alongside main.js in the plugin folder; resolve it to a URL
-    // the webview can actually load (a raw vault-relative path won't work in <img src> / CSS).
+    if (this.settings.villageState) {
+      try { this.village.fromJSON(this.settings.villageState); } catch (e) { /* skip corrupted state */ }
+    }
+    this.village.subscribe(() => this._debouncedSaveVillage());
+
     try {
       this._pluginDir = this.manifest.dir || `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
       this.villageMapUrl = await this._resolvePluginResource(
@@ -48,6 +57,10 @@ module.exports = class AIChatSidebarPlugin extends Plugin {
     }
     this._spriteUrlCache = new Map();
     this._dataUrlCache = new Map();
+    this._villageSaveTimer = null;
+    this._markdownComponent = new Component();
+    this._audioContext = null;
+    this._notificationSound = null;
 
     this.registerView(VIEW_TYPE_AI_CHAT, (leaf) => new AIChatView(leaf, this));
     this.registerView(VIEW_TYPE_AI_AGENT, (leaf) => new AgentView(leaf, this));
@@ -90,12 +103,92 @@ module.exports = class AIChatSidebarPlugin extends Plugin {
     });
 
     this.addSettingTab(new AIChatSettingTab(this.app, this));
+
+    // Initialize mobile-friendly agent status bar
+    this.agentStatusBar = new AgentStatusBar(this);
+    const statusBarContainer = this.app.workspace.containerEl.createDiv({ cls: 'ai-agent-status-bar' });
+    this.agentStatusBar.create(statusBarContainer);
+    this._statusBarContainer = statusBarContainer;
+    // Show on mobile by default, or when there are active agents
+    if (this.isMobile()) {
+      statusBarContainer.addClass('visible');
+    }
+
+    // Subscribe to village changes to show/hide status bar
+    this._villageStatusSub = this.village.subscribe(() => this.updateStatusBarVisibility());
+    this.updateStatusBarVisibility();
+  }
+
+  isMobile() {
+    return /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+           (navigator.maxTouchPoints && navigator.maxTouchPoints > 1 && /MacIntel/.test(navigator.platform));
+  }
+
+  updateStatusBarVisibility() {
+    if (!this._statusBarContainer) return;
+    const hasActiveAgents = Array.from(this.village.villagers.values()).some(
+      v => !v.isSubagent && v.status !== 'idle'
+    );
+    const shouldShow = this.isMobile() || hasActiveAgents;
+    this._statusBarContainer.toggleClass('visible', shouldShow);
+  }
+
+  _debouncedSaveVillage() {
+    clearTimeout(this._villageSaveTimer);
+    this._villageSaveTimer = setTimeout(() => {
+      this.settings.villageState = this.village.toJSON();
+      this.saveSettings();
+    }, 2000);
+  }
+
+  // Initialize audio context and load notification sound
+  async _initAudio() {
+    if (this._audioContext) return;
+    try {
+      this._audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      // Generate a simple chime tone programmatically (no external file needed)
+      const sampleRate = this._audioContext.sampleRate;
+      const duration = 0.3;
+      const samples = Math.floor(sampleRate * duration);
+      const buffer = this._audioContext.createBuffer(1, samples, sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < samples; i++) {
+        const t = i / sampleRate;
+        data[i] = Math.sin(2 * Math.PI * 880 * t) * Math.exp(-t * 15) * 0.3; // A5 note, decay
+      }
+      this._notificationSound = buffer;
+    } catch (e) {
+      console.warn('Audio initialization failed:', e);
+    }
+  }
+
+  // Play notification chime (unlocks audio on first user interaction)
+  async playNotificationSound() {
+    await this._initAudio();
+    if (!this._audioContext || !this._notificationSound) return;
+    // Resume context if suspended (mobile requires user interaction)
+    if (this._audioContext.state === 'suspended') {
+      await this._audioContext.resume();
+    }
+    const source = this._audioContext.createBufferSource();
+    source.buffer = this._notificationSound;
+    source.connect(this._audioContext.destination);
+    source.start();
   }
 
   onunload() {
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_AI_CHAT);
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_AI_AGENT);
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_AI_VILLAGE);
+    if (this.agentStatusBar) {
+      this.agentStatusBar.destroy();
+    }
+    if (this._villageStatusSub) {
+      this._villageStatusSub();
+    }
+    if (this._statusBarContainer) {
+      this._statusBarContainer.remove();
+    }
   }
 
   async activateView() {
@@ -187,6 +280,17 @@ module.exports = class AIChatSidebarPlugin extends Plugin {
     const provider = this.getActiveProvider();
     const systemText = [CHAT_NO_TOOLS_SYSTEM_NOTE, this.settings.systemPrompt].filter(Boolean).join('\n\n');
     return await providers.sendMessage(messages, provider, systemText);
+  }
+
+  async sendStreamMessage(messages, onDelta, signal) {
+    const provider = this.getActiveProvider();
+    const systemText = [CHAT_NO_TOOLS_SYSTEM_NOTE, this.settings.systemPrompt].filter(Boolean).join('\n\n');
+    return await providers.streamMessage(messages, provider, systemText, onDelta, signal);
+  }
+
+  renderMarkdown(el, markdown) {
+    el.empty();
+    MarkdownRenderer.render(this.app, markdown, el, '/', this._markdownComponent);
   }
 
   // --- Organize feature: gather vault info, ask AI for a plan, never execute anything itself ---
