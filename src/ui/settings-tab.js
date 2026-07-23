@@ -3,7 +3,7 @@
 const { PluginSettingTab, Setting } = require('obsidian');
 const { OrganizeModal } = require('./organize-modal');
 
-class AIChatSettingTab extends PluginSettingTab {
+class KlauSettingTab extends PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -13,7 +13,7 @@ class AIChatSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl('h2', { text: 'AI Chat Sidebar Settings' });
+    containerEl.createEl('h2', { text: 'klauAI Settings' });
 
     containerEl.createEl('p', {
       text:
@@ -46,7 +46,7 @@ class AIChatSettingTab extends PluginSettingTab {
         });
       });
 
-    containerEl.createEl('h3', { text: 'AI Village' });
+    containerEl.createEl('h3', { text: 'klauAI Village' });
     containerEl.createEl('p', {
       text:
         'Every AI villager — the chat sidebar as the Innkeeper, the Organize command as the ' +
@@ -87,7 +87,7 @@ class AIChatSettingTab extends PluginSettingTab {
         });
       });
 
-    containerEl.createEl('h3', { text: 'AI Agent' });
+    containerEl.createEl('h3', { text: 'klauAI Agent' });
     containerEl.createEl('p', {
       text:
         'The agent works through multi-step goals on its own — reading, searching, writing, ' +
@@ -504,4 +504,4 @@ class AIChatSettingTab extends PluginSettingTab {
   }
 }
 
-module.exports = { AIChatSettingTab };
+module.exports = { KlauSettingTab };

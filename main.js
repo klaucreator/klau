@@ -13,9 +13,9 @@ var __commonJS = (cb, mod) => function __require() {
 var require_constants = __commonJS({
   "src/core/constants.js"(exports2, module2) {
     "use strict";
-    var VIEW_TYPE_AI_CHAT2 = "ai-chat-sidebar-view";
-    var VIEW_TYPE_AI_AGENT2 = "ai-agent-sidebar-view";
-    var VIEW_TYPE_AI_VILLAGE2 = "ai-village-view";
+    var VIEW_TYPE_AI_CHAT2 = "klau-ai-chat-view";
+    var VIEW_TYPE_AI_AGENT2 = "klau-ai-agent-view";
+    var VIEW_TYPE_AI_VILLAGE2 = "klau-ai-village-view";
     var DEFAULT_SETTINGS2 = {
       providers: [
         {
@@ -39,12 +39,12 @@ var require_constants = __commonJS({
           timeoutMs: 12e4
         },
         {
-          id: "self-hosted",
-          name: "Self-hosted / Local",
-          type: "self-hosted",
+          id: "transformers-js",
+          name: "Transformers.js (In-browser)",
+          type: "transformers-js",
           apiKey: "",
-          baseUrl: "http://localhost:11434/v1",
-          model: "llama3.1",
+          baseUrl: "local://transformers-js",
+          model: "Xenova/Phi-3.5-mini-instruct",
           maxTokens: -1,
           timeoutMs: 12e4
         }
@@ -53,7 +53,7 @@ var require_constants = __commonJS({
       systemPrompt: "",
       includeActiveNote: false,
       organizeMaxFiles: 150,
-      agentMaxSteps: -1,
+      agentMaxSteps: 20,
       agentAutoApprove: false,
       agentTeam: [],
       villageState: null
@@ -126,12 +126,12 @@ var require_anthropic = __commonJS({
       const maxTokens = provider.maxTokens || -1;
       const body = {
         model: provider.model,
-        max_tokens: maxTokens,
         messages: messages.map((m) => ({
           role: m.role === "assistant" ? "assistant" : "user",
           content: m.content
         }))
       };
+      if (maxTokens > 0) body.max_tokens = maxTokens;
       if (systemText) body.system = systemText;
       const res = await requestUrl({
         url: `${provider.baseUrl.replace(/\/$/, "")}/v1/messages`,
@@ -344,39 +344,132 @@ var require_openai_compatible = __commonJS({
   }
 });
 
+// src/providers/transformers-js.js
+var require_transformers_js = __commonJS({
+  "src/providers/transformers-js.js"(exports2, module2) {
+    "use strict";
+    async function loadTransformers() {
+      if (typeof window !== "undefined" && window.Transformers) return window.Transformers;
+      const script = document.createElement("script");
+      script.type = "module";
+      script.textContent = `
+    import * as Transformers from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js';
+    window.Transformers = Transformers;
+  `;
+      document.head.appendChild(script);
+      await new Promise((resolve) => {
+        const check = setInterval(() => {
+          if (window.Transformers) {
+            clearInterval(check);
+            resolve();
+          }
+        }, 100);
+      });
+      return window.Transformers;
+    }
+    var pipeline = null;
+    var currentModelId = null;
+    async function initPipeline(modelId) {
+      const Transformers = await loadTransformers();
+      if (pipeline && currentModelId === modelId) return pipeline;
+      pipeline = await Transformers.pipeline("text-generation", modelId, {
+        dtype: "q4",
+        device: "webgpu",
+        progress_callback: (p) => {
+          if (p.status === "downloading") {
+            console.log(`Downloading ${modelId}: ${Math.round(p.progress * 100)}%`);
+          }
+        }
+      });
+      currentModelId = modelId;
+      return pipeline;
+    }
+    async function sendToTransformersJS(messages, provider, systemText) {
+      const modelId = provider.model || "Xenova/Phi-3.5-mini-instruct";
+      const pipe = await initPipeline(modelId);
+      const prompt = formatPrompt(messages, systemText);
+      const output = await pipe(prompt, {
+        max_new_tokens: provider.maxTokens > 0 ? provider.maxTokens : 2048,
+        temperature: 0.7,
+        top_p: 0.95,
+        do_sample: true,
+        return_full_text: false
+      });
+      return output[0]?.generated_text || "";
+    }
+    async function streamTransformersJS(messages, provider, systemText, onDelta, signal) {
+      const modelId = provider.model || "Xenova/Phi-3.5-mini-instruct";
+      const pipe = await initPipeline(modelId);
+      const prompt = formatPrompt(messages, systemText);
+      let fullText = "";
+      const output = await pipe(prompt, {
+        max_new_tokens: provider.maxTokens > 0 ? provider.maxTokens : 2048,
+        temperature: 0.7,
+        top_p: 0.95,
+        do_sample: true,
+        return_full_text: false,
+        callback_function: (text) => {
+          if (signal?.aborted) throw new Error("Aborted");
+          fullText = text;
+          onDelta(text);
+        }
+      });
+      return output[0]?.generated_text || fullText;
+    }
+    function formatPrompt(messages, systemText) {
+      let prompt = "";
+      if (systemText) {
+        prompt += `<|system|>
+${systemText}
+`;
+      }
+      for (const msg of messages) {
+        const role = msg.role === "assistant" ? "assistant" : "user";
+        prompt += `<|${role}|>
+${msg.content}
+`;
+      }
+      prompt += "<|assistant|>\n";
+      return prompt;
+    }
+    module2.exports = { sendToTransformersJS, streamTransformersJS };
+  }
+});
+
 // src/providers/index.js
 var require_providers = __commonJS({
   "src/providers/index.js"(exports2, module2) {
     "use strict";
     var { sendToAnthropic, streamAnthropic } = require_anthropic();
     var { sendToOpenAICompatible, streamOpenAICompatible } = require_openai_compatible();
+    var { sendToTransformersJS, streamTransformersJS } = require_transformers_js();
     function resolveActiveProvider(settings) {
       return settings.providers.find((p) => p.id === settings.activeProviderId) || settings.providers[0];
     }
     function assertUsableProvider(provider) {
       if (!provider) throw new Error("No AI provider configured. Add one in plugin settings.");
+      if (provider.type === "self-hosted" || provider.type === "transformers-js") return;
       if (!provider.apiKey) {
         throw new Error(`No API key set for "${provider.name}". Add one in plugin settings.`);
       }
     }
     async function sendMessage(messages, provider, systemText) {
       assertUsableProvider(provider);
-      if (provider.type === "anthropic") {
-        return await sendToAnthropic(messages, provider, systemText);
-      }
+      if (provider.type === "anthropic") return await sendToAnthropic(messages, provider, systemText);
+      if (provider.type === "transformers-js") return await sendToTransformersJS(messages, provider, systemText);
       return await sendToOpenAICompatible(messages, provider, systemText);
     }
     async function streamMessage(messages, provider, systemText, onDelta, signal) {
       assertUsableProvider(provider);
-      return provider.type === "anthropic" ? await streamAnthropic(messages, provider, systemText, onDelta, signal) : await streamOpenAICompatible(messages, provider, systemText, onDelta, signal);
+      if (provider.type === "anthropic") return await streamAnthropic(messages, provider, systemText, onDelta, signal);
+      if (provider.type === "transformers-js") return await streamTransformersJS(messages, provider, systemText, onDelta, signal);
+      return await streamOpenAICompatible(messages, provider, systemText, onDelta, signal);
     }
     module2.exports = {
       resolveActiveProvider,
       assertUsableProvider,
       sendMessage,
       streamMessage,
-      // Re-exported for callers (e.g. the agent loop's non-streaming fallback) that need a
-      // specific implementation rather than type-based dispatch.
       sendToAnthropic,
       sendToOpenAICompatible
     };
@@ -1317,6 +1410,11 @@ var require_village_roster = __commonJS({
       for (let i = 0; i < s.length; i++) h = h * 31 + s.charCodeAt(i) >>> 0;
       return VILLAGE_PROFESSION_POOL[h % VILLAGE_PROFESSION_POOL.length];
     }
+    var SKILL_TITLES = ["Novice", "Apprentice", "Journeyman", "Expert", "Master", "Grandmaster"];
+    function skillLevel(experience) {
+      const level = Math.min(Math.floor((experience || 0) / 3), SKILL_TITLES.length - 1);
+      return { level, title: SKILL_TITLES[level], nextAt: (level + 1) * 3 };
+    }
     var VILLAGE_SMALLTALK = [
       "Busy day, huh?",
       "Have you seen the notice board today?",
@@ -1335,7 +1433,8 @@ var require_village_roster = __commonJS({
       VILLAGE_PROFESSION_POOL,
       VILLAGE_SMALLTALK,
       villageSlug,
-      resolveVillageProfession
+      resolveVillageProfession,
+      skillLevel
     };
   }
 });
@@ -1344,10 +1443,12 @@ var require_village_roster = __commonJS({
 var require_village_store = __commonJS({
   "src/village/village-store.js"(exports2, module2) {
     "use strict";
-    var { VILLAGE_PROFESSIONS, VILLAGE_BUILDINGS } = require_village_roster();
+    var { VILLAGE_PROFESSIONS, VILLAGE_BUILDINGS, resolveVillageProfession, skillLevel } = require_village_roster();
     var READING_TOOLS = /* @__PURE__ */ new Set(["list_files", "read_note", "read_notes", "get_note_metadata", "search_notes", "search_web"]);
     var WRITING_TOOLS = /* @__PURE__ */ new Set(["write_note", "append_note", "add_tags", "move_note", "rename_note", "create_folder", "delete_note"]);
     var BUBBLE_AUTO_FADE = 2500;
+    var AUTO_SPAWN_CHECK_MS = 5e3;
+    var SPAWN_QUEUE_THRESHOLD = 2;
     var VillageStore2 = class {
       constructor(plugin) {
         this.plugin = plugin;
@@ -1359,6 +1460,9 @@ var require_village_store = __commonJS({
         this._idleTimers = /* @__PURE__ */ new Map();
         this._bubbleTimers = /* @__PURE__ */ new Map();
         this._seatAssignments = /* @__PURE__ */ new Map();
+        this.taskQueue = [];
+        this._lastSpawnCheck = 0;
+        this._spawnCount = 0;
       }
       subscribe(fn) {
         this.listeners.add(fn);
@@ -1381,8 +1485,8 @@ var require_village_store = __commonJS({
           const key = `${buildingKey}-${seat.x}-${seat.y}`;
           let taken = false;
           for (const vkey of assigned) {
-            const v2 = this.villagers.get(vkey);
-            if (v2 && v2.assignedSeat === key) {
+            const v = this.villagers.get(vkey);
+            if (v && v.assignedSeat === key) {
               taken = true;
               break;
             }
@@ -1393,8 +1497,8 @@ var require_village_store = __commonJS({
       }
       ensure(key, professionKey, name) {
         if (!VILLAGE_PROFESSIONS[professionKey]) professionKey = "mayor";
-        let v2 = this.villagers.get(key);
-        if (!v2) {
+        let v = this.villagers.get(key);
+        if (!v) {
           const prof = VILLAGE_PROFESSIONS[professionKey];
           const building = VILLAGE_BUILDINGS[prof.building];
           const seat = this._nextSeat(prof.building);
@@ -1403,7 +1507,7 @@ var require_village_store = __commonJS({
             if (!this._seatAssignments.has(prof.building)) this._seatAssignments.set(prof.building, /* @__PURE__ */ new Set());
             this._seatAssignments.get(prof.building).add(key);
           }
-          v2 = {
+          v = {
             key,
             name: name || prof.title,
             professionKey,
@@ -1417,21 +1521,26 @@ var require_village_store = __commonJS({
             wanderPauseUntil: 0,
             assignedSeat: seatKey,
             toolHistory: [],
+            experience: 0,
+            completedTasks: [],
+            lessons: [],
             updatedAt: Date.now()
           };
-          this.villagers.set(key, v2);
+          this.villagers.set(key, v);
+          this.log("info", `${v.name} arrived (${VILLAGE_PROFESSIONS[professionKey]?.title || professionKey})`);
         } else if (name) {
-          v2.name = name;
+          v.name = name;
         }
         this._emit();
-        this.log("info", `${v2.name} arrived (${VILLAGE_PROFESSIONS[professionKey]?.title || professionKey})`);
-        return v2;
+        const sl = skillLevel(v.experience);
+        this.log("log", `${v.name} ${v.experience > 0 ? `(Lvl ${sl.level} ${sl.title}) ` : ""}ready`);
+        return v;
       }
       removeVillager(key) {
-        const v2 = this.villagers.get(key);
-        if (!v2) return;
-        if (v2.assignedSeat && v2.professionKey) {
-          const prof = VILLAGE_PROFESSIONS[v2.professionKey];
+        const v = this.villagers.get(key);
+        if (!v) return;
+        if (v.assignedSeat && v.professionKey) {
+          const prof = VILLAGE_PROFESSIONS[v.professionKey];
           if (prof) {
             const s = this._seatAssignments.get(prof.building);
             if (s) s.delete(key);
@@ -1447,42 +1556,42 @@ var require_village_store = __commonJS({
         return null;
       }
       addToolEntry(key, tool, args, status, resultSummary) {
-        const v2 = this.villagers.get(key);
-        if (!v2) return;
-        v2.toolHistory.push({
+        const v = this.villagers.get(key);
+        if (!v) return;
+        v.toolHistory.push({
           tool,
           args: args ? JSON.stringify(args).slice(0, 120) : "",
           status: status || "done",
           result: resultSummary ? String(resultSummary).slice(0, 100) : "",
           timestamp: Date.now()
         });
-        if (v2.toolHistory.length > 50) v2.toolHistory.shift();
+        if (v.toolHistory.length > 50) v.toolHistory.shift();
         this._emit();
       }
       setStatus(key, status, opts) {
         opts = opts || {};
-        const v2 = this.villagers.get(key);
-        if (!v2) return;
+        const v = this.villagers.get(key);
+        if (!v) return;
         clearTimeout(this._idleTimers.get(key));
-        v2.status = status;
-        v2.subStatus = opts.subStatus !== void 0 ? opts.subStatus : null;
-        v2.taskText = opts.taskText !== void 0 ? opts.taskText : v2.taskText;
-        v2.walkTarget = null;
-        if (opts.mood) v2.mood = opts.mood;
-        else if (status === "working") v2.mood = "busy";
-        else if (status === "reviewing") v2.mood = "thinking";
-        else if (status === "waiting") v2.mood = "waiting";
-        else if (status === "error") v2.mood = "waiting";
-        else if (status === "finished") v2.mood = "happy";
-        else if (status === "idle") v2.mood = "happy";
-        v2.updatedAt = Date.now();
+        v.status = status;
+        v.subStatus = opts.subStatus !== void 0 ? opts.subStatus : null;
+        v.taskText = opts.taskText !== void 0 ? opts.taskText : v.taskText;
+        v.walkTarget = null;
+        if (opts.mood) v.mood = opts.mood;
+        else if (status === "working") v.mood = "busy";
+        else if (status === "reviewing") v.mood = "thinking";
+        else if (status === "waiting") v.mood = "waiting";
+        else if (status === "error") v.mood = "waiting";
+        else if (status === "finished") v.mood = "happy";
+        else if (status === "idle") v.mood = "happy";
+        v.updatedAt = Date.now();
         if (opts.bubble !== void 0) {
           if (opts.bubble === null) this.clearBubble(key);
           else this.setBubble(key, opts.bubble.icon, opts.bubble.text, opts.bubble.duration);
         }
         this._emit();
         const statusLabel = { working: "started working", meeting: "entered a meeting", reviewing: "is reviewing", waiting: "is waiting", finished: "finished", error: "hit an error", idle: "is now idle" }[status] || status;
-        this.log(status === "error" ? "error" : status === "waiting" ? "warn" : "log", `${v2.name} ${statusLabel}${opts.taskText ? ": " + opts.taskText : ""}`);
+        this.log(status === "error" ? "error" : status === "waiting" ? "warn" : "log", `${v.name} ${statusLabel}${opts.taskText ? ": " + opts.taskText : ""}`);
         if (status === "finished" || status === "error") {
           if (this.plugin && this.plugin.playNotificationSound) {
             this.plugin.playNotificationSound().catch(() => {
@@ -1497,10 +1606,10 @@ var require_village_store = __commonJS({
         }
       }
       setBubble(key, icon, text, durationMs) {
-        const v2 = this.villagers.get(key);
-        if (!v2) return;
+        const v = this.villagers.get(key);
+        if (!v) return;
         const expiresAt = durationMs === 0 ? 0 : Date.now() + (durationMs || BUBBLE_AUTO_FADE);
-        v2.bubble = { icon: icon || "", text: text || "", expiresAt };
+        v.bubble = { icon: icon || "", text: text || "", expiresAt };
         if (durationMs !== 0) {
           clearTimeout(this._bubbleTimers.get(key));
           const timer = setTimeout(() => {
@@ -1513,35 +1622,36 @@ var require_village_store = __commonJS({
         this._emit();
       }
       clearBubble(key) {
-        const v2 = this.villagers.get(key);
-        if (!v2) return;
-        v2.bubble = null;
+        const v = this.villagers.get(key);
+        if (!v) return;
+        v.bubble = null;
         clearTimeout(this._bubbleTimers.get(key));
         this._bubbleTimers.delete(key);
         this._emit();
       }
       walkTo(key, x, y, onArrival) {
-        const v2 = this.villagers.get(key);
-        if (!v2) return;
-        v2.status = "walking";
-        v2.walkTarget = { x, y, onArrival: typeof onArrival === "function" ? onArrival : null, startedAt: Date.now() };
-        v2.taskText = "";
+        const v = this.villagers.get(key);
+        if (!v) return;
+        v.status = "walking";
+        v.walkTarget = { x, y, onArrival: typeof onArrival === "function" ? onArrival : null, startedAt: Date.now() };
+        v.taskText = "";
         this._emit();
       }
       tickAnimations() {
         const now = Date.now();
         let changed = false;
-        for (const [key, v2] of this.villagers) {
-          if (v2.status === "walking" && v2.walkTarget) {
-            if (now - v2.walkTarget.startedAt >= 900) {
-              const cb = v2.walkTarget.onArrival;
-              v2.walkTarget = null;
-              v2.status = "idle";
+        for (const [key, v] of this.villagers) {
+          if (v.status === "walking" && v.walkTarget) {
+            if (now - v.walkTarget.startedAt >= 900) {
+              const cb = v.walkTarget.onArrival;
+              v.walkTarget = null;
+              v.status = "idle";
               changed = true;
               if (cb) cb(key);
             }
           }
         }
+        this._checkSpawn();
         if (changed) this._emit();
       }
       // --- Sub-agent support ---
@@ -1549,7 +1659,7 @@ var require_village_store = __commonJS({
         const parent = this.villagers.get(parentKey);
         if (!parent) return null;
         const key = `sub-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-        const v2 = {
+        const v = {
           key,
           name: name || "Helper",
           professionKey: parent.professionKey,
@@ -1567,20 +1677,20 @@ var require_village_store = __commonJS({
           parentKey,
           updatedAt: Date.now()
         };
-        this.villagers.set(key, v2);
+        this.villagers.set(key, v);
         this._emit();
-        this.log("info", `${v2.name} spawned as sub-agent for ${parent.name}: ${taskText}`);
-        return v2;
+        this.log("info", `${v.name} spawned as sub-agent for ${parent.name}: ${taskText}`);
+        return v;
       }
       despawnSubagent(key) {
-        const v2 = this.villagers.get(key);
-        if (!v2 || !v2.isSubagent) return;
+        const v = this.villagers.get(key);
+        if (!v || !v.isSubagent) return;
         this.villagers.delete(key);
         this._emit();
       }
       say(key, text) {
-        const v2 = this.villagers.get(key);
-        const from = v2 ? v2.name : key;
+        const v = this.villagers.get(key);
+        const from = v ? v.name : key;
         const entry = { ts: Date.now(), from, text, key };
         this.feed.push(entry);
         if (this.feed.length > 50) this.feed.shift();
@@ -1606,44 +1716,121 @@ var require_village_store = __commonJS({
         }, 2600);
         return id;
       }
+      recordTaskComplete(key, summary) {
+        const v = this.villagers.get(key);
+        if (!v) return;
+        v.experience = (v.experience || 0) + 1;
+        const oldLevel = skillLevel(v.experience - 1).level;
+        const newLevel = skillLevel(v.experience).level;
+        const entry = { summary: String(summary || "").slice(0, 120), completedAt: Date.now() };
+        v.completedTasks.push(entry);
+        if (v.completedTasks.length > 20) v.completedTasks.shift();
+        v.lessons.push(entry.summary);
+        if (v.lessons.length > 10) v.lessons = v.lessons.slice(-10);
+        if (newLevel > oldLevel) {
+          const sl = skillLevel(v.experience);
+          this.setBubble(key, "\u2B50", `Reached ${sl.title}!`, 3e3);
+          this.log("info", `${v.name} leveled up to ${sl.title} (Lvl ${sl.level})`);
+        }
+        this._emit();
+      }
+      getLessons(forKey) {
+        const v = this.villagers.get(forKey);
+        if (!v || !v.lessons || v.lessons.length === 0) return "";
+        return v.lessons.map((l, i) => `${i + 1}. ${l}`).join("\n");
+      }
+      addTask(goal) {
+        const task = { id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`, goal, createdAt: Date.now(), assignedTo: null };
+        this.taskQueue.push(task);
+        this.log("log", `Task queued: "${goal.slice(0, 60)}" (${this.taskQueue.length} pending)`);
+        this._checkSpawn();
+        this._emit();
+        return task;
+      }
+      claimNextTask(key) {
+        const task = this.taskQueue.find((t) => !t.assignedTo);
+        if (!task) return null;
+        task.assignedTo = key;
+        this._emit();
+        return task;
+      }
+      taskQueueLength() {
+        return this.taskQueue.filter((t) => !t.assignedTo).length;
+      }
+      _checkSpawn() {
+        const now = Date.now();
+        if (now - this._lastSpawnCheck < AUTO_SPAWN_CHECK_MS) return;
+        this._lastSpawnCheck = now;
+        const unassigned = this.taskQueue.filter((t) => !t.assignedTo).length;
+        if (unassigned === 0) return;
+        const idleCount = Array.from(this.villagers.values()).filter((v) => !v.isSubagent && (v.status === "idle" || v.status === "finished")).length;
+        if (unassigned > idleCount * SPAWN_QUEUE_THRESHOLD) {
+          this._autoSpawnVillager();
+        }
+      }
+      _autoSpawnVillager() {
+        const unassigned = this.taskQueue.filter((t) => !t.assignedTo);
+        if (unassigned.length === 0) return;
+        const goal = unassigned[0].goal;
+        const profKey = resolveVillageProfession("Auto-spawned", goal);
+        const prof = VILLAGE_PROFESSIONS[profKey];
+        this._spawnCount++;
+        const name = `${prof ? prof.title : "Villager"} ${String.fromCharCode(65 + (this._spawnCount - 1) % 26)}`;
+        const key = `spawn-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+        const building = prof ? VILLAGE_BUILDINGS[prof.building] : null;
+        this.ensure(key, profKey, name);
+        const v = this.villagers.get(key);
+        if (v) {
+          this.setBubble(key, "\u{1F331}", `Spawned for "${goal.slice(0, 30)}"`, 3e3);
+          this.log("info", `${name} spawned (${prof?.title || profKey}) \u2014 ${this.taskQueue.filter((t) => !t.assignedTo).length} tasks queued`);
+        }
+        this._emit();
+        return key;
+      }
       toJSON() {
         const villagers = {};
-        for (const [key, v2] of this.villagers) {
+        for (const [key, v] of this.villagers) {
           villagers[key] = {
-            name: v2.name,
-            professionKey: v2.professionKey,
-            status: v2.status,
-            subStatus: v2.subStatus,
-            mood: v2.mood,
-            taskText: v2.taskText,
-            facing: v2.facing,
-            assignedSeat: v2.assignedSeat,
-            isSubagent: v2.isSubagent || false,
-            parentKey: v2.parentKey || null,
-            toolHistory: v2.toolHistory.slice(-10)
+            name: v.name,
+            professionKey: v.professionKey,
+            status: v.status,
+            subStatus: v.subStatus,
+            mood: v.mood,
+            taskText: v.taskText,
+            facing: v.facing,
+            assignedSeat: v.assignedSeat,
+            isSubagent: v.isSubagent || false,
+            parentKey: v.parentKey || null,
+            toolHistory: v.toolHistory.slice(-10),
+            experience: v.experience || 0,
+            completedTasks: (v.completedTasks || []).slice(-5),
+            lessons: (v.lessons || []).slice(-5)
           };
         }
-        return { villagers, seatAssignments: Array.from(this._seatAssignments.entries()).map(([bk, s]) => [bk, Array.from(s)]) };
+        return { villagers, seatAssignments: Array.from(this._seatAssignments.entries()).map(([bk, s]) => [bk, Array.from(s)]), taskQueue: this.taskQueue.slice(-20) };
       }
       fromJSON(data) {
         if (!data || !data.villagers) return;
-        for (const [key, v2] of Object.entries(data.villagers)) {
+        for (const [key, v] of Object.entries(data.villagers)) {
           this.villagers.set(key, {
             key,
-            name: v2.name,
-            professionKey: v2.professionKey,
+            name: v.name,
+            professionKey: v.professionKey,
             status: "idle",
             subStatus: null,
             mood: "happy",
             taskText: "",
             bubble: null,
-            facing: v2.facing || "south",
+            facing: v.facing || "south",
             walkTarget: null,
             wanderPauseUntil: 0,
-            assignedSeat: v2.assignedSeat || null,
-            toolHistory: v2.toolHistory || [],
-            isSubagent: v2.isSubagent || false,
-            parentKey: v2.parentKey || null,
+            assignedSeat: v.assignedSeat || null,
+            toolHistory: v.toolHistory || [],
+            isSubagent: v.isSubagent || false,
+            parentKey: v.parentKey || null,
+            experience: v.experience || 0,
+            completedTasks: v.completedTasks || [],
+            lessons: v.lessons || [],
             updatedAt: Date.now()
           });
         }
@@ -1831,8 +2018,8 @@ var require_memory_manager = __commonJS({
       }
       return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
         const r = Math.random() * 16 | 0;
-        const v2 = c === "x" ? r : r & 3 | 8;
-        return v2.toString(16);
+        const v = c === "x" ? r : r & 3 | 8;
+        return v.toString(16);
       });
     }
     var LONG_TERM_STORE_METHODS = ["add", "get", "list", "update", "delete", "clear", "toJSON", "fromJSON"];
@@ -2359,7 +2546,7 @@ var require_chat_view = __commonJS({
     "use strict";
     var { ItemView, Notice } = require("obsidian");
     var { VIEW_TYPE_AI_CHAT: VIEW_TYPE_AI_CHAT2 } = require_constants();
-    var AIChatView2 = class extends ItemView {
+    var KlauChatView2 = class extends ItemView {
       constructor(leaf, plugin) {
         super(leaf);
         this.plugin = plugin;
@@ -2370,7 +2557,7 @@ var require_chat_view = __commonJS({
         return VIEW_TYPE_AI_CHAT2;
       }
       getDisplayText() {
-        return "AI Chat";
+        return "klauAI Chat";
       }
       getIcon() {
         return "message-square";
@@ -2378,7 +2565,7 @@ var require_chat_view = __commonJS({
       async onOpen() {
         const container = this.containerEl.children[1];
         container.empty();
-        container.addClass("ai-chat-sidebar-container");
+        container.addClass("klau-chat-container");
         const header = container.createDiv({ cls: "ai-chat-header" });
         this.providerSelect = header.createEl("select", { cls: "ai-chat-provider-select" });
         this.refreshProviderOptions();
@@ -2484,7 +2671,7 @@ Question: ${text}`;
             village.setStatus("innkeeper", "idle", { taskText: "Stopped" });
           } else {
             bodyEl.setText(`\u26A0\uFE0F Error: ${err.message}`);
-            new Notice(`AI Chat error: ${err.message}`);
+            new Notice(`klauAI chat error: ${err.message}`);
             village.setStatus("innkeeper", "error", { taskText: err.message.slice(0, 80) });
             village.say("innkeeper", `Ink spilled \u2014 ${err.message.slice(0, 70)}`);
           }
@@ -2516,7 +2703,7 @@ Question: ${text}`;
         }
       }
     };
-    module2.exports = { AIChatView: AIChatView2 };
+    module2.exports = { KlauChatView: KlauChatView2 };
   }
 });
 
@@ -2553,7 +2740,7 @@ var require_agent_view = __commonJS({
     var { VIEW_TYPE_AI_AGENT: VIEW_TYPE_AI_AGENT2 } = require_constants();
     var { MUTATING_TOOLS, AGENT_EDITABLE_FIELDS } = require_tool_metadata();
     var { sleep } = require_agent_loop();
-    var { villageSlug, resolveVillageProfession, VILLAGE_BUILDINGS, VILLAGE_PROFESSIONS } = require_village_roster();
+    var { villageSlug, resolveVillageProfession, VILLAGE_BUILDINGS, VILLAGE_PROFESSIONS, skillLevel } = require_village_roster();
     var AgentView2 = class extends ItemView {
       constructor(leaf, plugin) {
         super(leaf);
@@ -2565,7 +2752,7 @@ var require_agent_view = __commonJS({
         return VIEW_TYPE_AI_AGENT2;
       }
       getDisplayText() {
-        return "AI Agent";
+        return "klauAI Agent";
       }
       getIcon() {
         return "bot";
@@ -2705,11 +2892,11 @@ var require_agent_view = __commonJS({
           }
           for (const member of selectedMembers) {
             const key = villageSlug(member.name);
-            const v2 = village.villagers.get(key);
-            if (!v2) continue;
+            const v = village.villagers.get(key);
+            if (!v) continue;
             if (finishedKeys.includes(key)) {
               village.setStatus(key, "finished", { taskText: "Done" });
-            } else if (v2.status === "working" || v2.status === "meeting") {
+            } else if (v.status === "working" || v.status === "meeting") {
               village.setStatus(key, "idle", { taskText: "" });
             }
           }
@@ -2761,8 +2948,8 @@ Continue toward the overall goal, focusing on your role.` : goal;
         let attendeeKeys = [];
         if (finishedKeys.length > 0 && this.running) {
           const finishedMembers = finishedKeys.map((key) => {
-            const v2 = village.villagers.get(key);
-            return { key, name: v2 ? v2.name : key, report: finishedReports.get(key) || "" };
+            const v = village.villagers.get(key);
+            return { key, name: v ? v.name : key, report: finishedReports.get(key) || "" };
           });
           village.ensure("mayor", "mayor", "Mayor");
           village.setStatus("mayor", "reviewing", { taskText: "Deciding who needs to attend the meeting" });
@@ -2778,10 +2965,10 @@ Continue toward the overall goal, focusing on your role.` : goal;
         }
         if (attendeeKeys.length > 0 && this.running) {
           for (const key of attendeeKeys) {
-            const v2 = village.villagers.get(key);
-            if (!v2) continue;
+            const v = village.villagers.get(key);
+            if (!v) continue;
             village.say(key, "Done on my end \u2014 heading to the Town Hall.");
-            this.logStep("meeting", `${v2.name} announces they're heading to the Town Hall.`);
+            this.logStep("meeting", `${v.name} announces they're heading to the Town Hall.`);
             await sleep(350);
           }
           this.setStepCounter("Meeting at the Town Hall\u2026");
@@ -2793,11 +2980,11 @@ Continue toward the overall goal, focusing on your role.` : goal;
           await sleep(1200);
           for (const key of attendeeKeys) {
             if (!this.running) break;
-            const v2 = village.villagers.get(key);
-            if (!v2) continue;
+            const v = village.villagers.get(key);
+            if (!v) continue;
             village.setStatus(key, "meeting", { taskText: "Reporting back" });
             village.say(key, "Reporting back \u2014 my part is done.");
-            this.logStep("meeting", `${v2.name} reports back at the Town Hall.`);
+            this.logStep("meeting", `${v.name} reports back at the Town Hall.`);
             await sleep(500);
           }
           await sleep(500);
@@ -2805,25 +2992,40 @@ Continue toward the overall goal, focusing on your role.` : goal;
         }
         for (const member of selectedMembers) {
           const key = villageSlug(member.name);
-          const v2 = village.villagers.get(key);
-          if (!v2) continue;
+          const v = village.villagers.get(key);
+          if (!v) continue;
           if (finishedKeys.includes(key)) {
             village.setStatus(key, "finished", { taskText: "Done" });
-          } else if (v2.status === "meeting" || v2.status === "working") {
+          } else if (v.status === "meeting" || v.status === "working") {
             village.setStatus(key, "idle", { taskText: "" });
           }
         }
       }
       async runStage(goalText, roleText, label, villageKey) {
-        const transcript = [{ role: "user", content: goalText }];
-        const maxSteps = this.plugin.settings.agentMaxSteps || 20;
-        let steps = 0;
-        const prefix = label ? `[${label}] ` : "";
         const village = this.plugin.village;
         const vkey = villageKey || "mayor";
+        const v = village.villagers.get(vkey);
+        const exp = v ? v.experience || 0 : 0;
+        const sl = skillLevel(exp);
+        const lessons = village.getLessons(vkey);
+        let experienceContext = `You have completed ${exp} task(s) \u2014 skill level: ${sl.title} (Lvl ${sl.level}).`;
+        if (lessons) {
+          experienceContext += `
+
+Things you learned from past tasks:
+${lessons}`;
+        }
+        const enrichedGoal = `${experienceContext}
+
+Your goal:
+${goalText}`;
+        const transcript = [{ role: "user", content: enrichedGoal }];
+        const maxSteps = this.plugin.settings.agentMaxSteps || -1;
+        let steps = 0;
+        const prefix = label ? `[${label}] ` : "";
         village.setBubble(vkey, "\u{1F4AD}", "Getting started...", 0);
         village.setStatus(vkey, "working", { taskText: "Getting started...", subStatus: "thinking" });
-        while (this.running && steps < maxSteps) {
+        while (this.running && (maxSteps <= 0 || steps < maxSteps)) {
           steps++;
           this.setStepCounter(`Step ${steps} / ${maxSteps}${label ? ` \u2014 ${label}` : ""}`);
           village.setBubble(vkey, "\u{1F4AD}", "Thinking...", 0);
@@ -2864,6 +3066,7 @@ Continue toward the overall goal, focusing on your role.` : goal;
             village.setStatus(vkey, "finished", { taskText: "Done", bubble: null });
             village.addToolEntry(vkey, "final", {}, "done", parsed.final.slice(0, 100));
             village.say(vkey, parsed.final.slice(0, 90));
+            village.recordTaskComplete(vkey, parsed.final.slice(0, 120));
             this.setStepCounter("");
             return parsed.final;
           }
@@ -2928,7 +3131,7 @@ Continue toward the overall goal, focusing on your role.` : goal;
           transcript.push({ role: "user", content: `Tool result:
 ${resultText}` });
         }
-        if (steps >= maxSteps && this.running) {
+        if (maxSteps > 0 && steps >= maxSteps && this.running) {
           this.logStep("error", `${prefix}Reached the maximum step limit (change it in settings if needed).`);
           village.setStatus(vkey, "error", { taskText: "Ran out of steps" });
         } else if (!this.running) {
@@ -3005,7 +3208,7 @@ var require_village_view = __commonJS({
     "use strict";
     var { ItemView } = require("obsidian");
     var { VIEW_TYPE_AI_VILLAGE: VIEW_TYPE_AI_VILLAGE2 } = require_constants();
-    var { VILLAGE_BUILDINGS, VILLAGE_PROFESSIONS, VILLAGE_SMALLTALK } = require_village_roster();
+    var { VILLAGE_BUILDINGS, VILLAGE_PROFESSIONS, VILLAGE_SMALLTALK, skillLevel } = require_village_roster();
     var VILLAGE_STATUS_PRIORITY = ["error", "walking", "working", "meeting", "reviewing", "waiting", "finished", "idle"];
     var VILLAGE_TICK_MS = 200;
     var MOBILE_TICK_MS = 500;
@@ -3025,6 +3228,15 @@ var require_village_view = __commonJS({
       return "\u{1F642}";
     }
     var VILLAGE_SPRITE_DIRS = ["east", "south-east", "south", "south-west", "west", "north-west", "north", "north-east"];
+    function cartesianToIsoX(x, y) {
+      return (x - y) * 0.5 + 50;
+    }
+    function cartesianToIsoY(x, y) {
+      return (x + y) * 0.25 + 25;
+    }
+    function cartesianToIso(x, y) {
+      return { x: cartesianToIsoX(x, y), y: cartesianToIsoY(x, y) };
+    }
     function villageDirectionFor(dx, dy) {
       if (Math.abs(dx) < 0.05 && Math.abs(dy) < 0.05) return null;
       const angle = Math.atan2(dy, dx) * (180 / Math.PI);
@@ -3062,7 +3274,7 @@ var require_village_view = __commonJS({
         return VIEW_TYPE_AI_VILLAGE2;
       }
       getDisplayText() {
-        return "AI Village";
+        return "klauAI Village";
       }
       getIcon() {
         return "castle";
@@ -3075,6 +3287,7 @@ var require_village_view = __commonJS({
         toolbar.createDiv({ cls: "ai-village-title", text: "The Village" });
         const legend = toolbar.createDiv({ cls: "ai-village-legend" });
         legend.createSpan({ text: "\u2699\uFE0F working  \u{1F5E3}\uFE0F meeting  \u{1F4AD} reviewing  \u231B waiting  \u2728 finished  \u26A0\uFE0F error  \u{1F6B6} walking" });
+        this.taskQueueEl = toolbar.createSpan({ cls: "ai-village-queue-count", text: "" });
         this.diagBtn = toolbar.createEl("button", { cls: "ai-village-diag-btn", text: "\u{1F4CB} Tools" });
         this.diagBtn.addEventListener("click", () => this.toggleDiagnostics());
         this.nightBtn = toolbar.createEl("button", { cls: "ai-village-night-toggle", text: "\u{1F313} Auto" });
@@ -3108,8 +3321,9 @@ var require_village_view = __commonJS({
         this.diagPanel.style.display = "none";
         for (const [key, b] of Object.entries(VILLAGE_BUILDINGS)) {
           const el = this.spriteLayerEl.createDiv({ cls: "ai-village-building" });
-          el.style.left = `${b.x}%`;
-          el.style.top = `${b.y}%`;
+          const ib = cartesianToIso(b.x, b.y);
+          el.style.left = `${ib.x}%`;
+          el.style.top = `${ib.y}%`;
           el.createDiv({ cls: "ai-village-building-glow" });
           el.createDiv({ cls: "ai-village-building-smoke" });
           const bar = el.createDiv({ cls: "ai-village-building-bar" });
@@ -3229,13 +3443,13 @@ var require_village_view = __commonJS({
         this.sceneEl.toggleClass("is-night", this.isNight());
         this.sync();
       }
-      getSeatPosition(prof, v2) {
-        if (v2.assignedSeat) {
+      getSeatPosition(prof, v) {
+        if (v.assignedSeat) {
           const building = VILLAGE_BUILDINGS[prof.building];
           if (building && building.seats) {
             for (const seat of building.seats) {
-              if (`${prof.building}-${seat.x}-${seat.y}` === v2.assignedSeat) {
-                return { x: seat.x, y: seat.y };
+              if (`${prof.building}-${seat.x}-${seat.y}` === v.assignedSeat) {
+                return cartesianToIso(seat.x, seat.y);
               }
             }
           }
@@ -3252,6 +3466,10 @@ var require_village_view = __commonJS({
           y: Math.min(96, Math.max(4, anchor.y + Math.sin(angle) * radius + (Math.random() * 4 - 2)))
         };
       }
+      jitterIso(cartAnchor, key) {
+        const iso = cartesianToIso(cartAnchor.x, cartAnchor.y);
+        return this.jitter(iso, key);
+      }
       doorStagger(key) {
         let h = 0;
         for (let i = 0; i < key.length; i++) h = h * 31 + key.charCodeAt(i) >>> 0;
@@ -3260,11 +3478,11 @@ var require_village_view = __commonJS({
       gameTick() {
         const village = this.plugin.village;
         village.tickAnimations();
-        for (const [key, v2] of village.villagers) {
-          if (v2.status !== "walking") continue;
+        for (const [key, v] of village.villagers) {
+          if (v.status !== "walking") continue;
           const el = this.villagerEls.get(key);
           if (!el) continue;
-          const prof = VILLAGE_PROFESSIONS[v2.professionKey];
+          const prof = VILLAGE_PROFESSIONS[v.professionKey];
           if (!prof || !prof.spriteDir) continue;
           const curX = parseFloat(el.style.left);
           const curY = parseFloat(el.style.top);
@@ -3294,17 +3512,17 @@ var require_village_view = __commonJS({
       syncBubbles() {
         const village = this.plugin.village;
         const now = Date.now();
-        for (const [key, v2] of village.villagers) {
+        for (const [key, v] of village.villagers) {
           const el = this.villagerEls.get(key);
           if (!el) continue;
           const bubbleEl = el.querySelector(".ai-village-villager-bubble");
           if (!bubbleEl) continue;
-          if (v2.bubble && (v2.bubble.expiresAt === 0 || now < v2.bubble.expiresAt)) {
-            bubbleEl.setText(`${v2.bubble.icon || ""} ${v2.bubble.text}`.trim());
+          if (v.bubble && (v.bubble.expiresAt === 0 || now < v.bubble.expiresAt)) {
+            bubbleEl.setText(`${v.bubble.icon || ""} ${v.bubble.text}`.trim());
             bubbleEl.style.display = "block";
             el.addClass("has-bubble");
-          } else if (!v2.bubble || now >= v2.bubble.expiresAt) {
-            if (v2.bubble && now >= v2.bubble.expiresAt && v2.bubble.expiresAt !== 0) {
+          } else if (!v.bubble || now >= v.bubble.expiresAt) {
+            if (v.bubble && now >= v.bubble.expiresAt && v.bubble.expiresAt !== 0) {
               village.clearBubble(key);
             }
             if (!this.chattingUntil.has(key)) {
@@ -3333,12 +3551,12 @@ var require_village_view = __commonJS({
         const village = this.plugin.village;
         const night = this.isNight();
         const now = Date.now();
-        for (const [key, v2] of village.villagers) {
-          if (v2.isSubagent) continue;
+        for (const [key, v] of village.villagers) {
+          if (v.isSubagent) continue;
           const el = this.villagerEls.get(key);
           if (!el) continue;
-          const isOut = v2.status === "idle" || v2.status === "finished" || v2.status === "waiting" || v2.status === "reviewing";
-          const isWalking = v2.status === "walking";
+          const isOut = v.status === "idle" || v.status === "finished" || v.status === "waiting" || v.status === "reviewing";
+          const isWalking = v.status === "walking";
           if (!isOut && !isWalking) {
             this.wanderTargets.delete(key);
             continue;
@@ -3347,14 +3565,15 @@ var require_village_view = __commonJS({
             this.wanderTargets.delete(key);
             continue;
           }
-          const prof = VILLAGE_PROFESSIONS[v2.professionKey];
+          const prof = VILLAGE_PROFESSIONS[v.professionKey];
           if (!prof) continue;
-          if (night && v2.status === "idle") {
+          if (night && v.status === "idle") {
             const anchor = VILLAGE_BUILDINGS[prof.building];
             const curX2 = parseFloat(el.style.left);
             const curY2 = parseFloat(el.style.top);
-            if (!Number.isFinite(curX2) || Math.abs(curX2 - anchor.x) > 2 || Math.abs(curY2 - (anchor.y + 3)) > 2) {
-              this.moveVillager(key, el, prof, anchor.x, anchor.y + 3);
+            const isoHome = cartesianToIso(anchor.x, anchor.y + 3);
+            if (!Number.isFinite(curX2) || Math.abs(curX2 - isoHome.x) > 2 || Math.abs(curY2 - isoHome.y) > 2) {
+              this.moveVillager(key, el, prof, isoHome.x, isoHome.y);
             }
             this.wanderTargets.delete(key);
             continue;
@@ -3364,19 +3583,19 @@ var require_village_view = __commonJS({
           const curY = parseFloat(el.style.top);
           const arrived = !target || Math.abs(curX - target.x) < 2.5 && Math.abs(curY - target.y) < 2.5;
           if (arrived) {
-            if (v2.status === "idle" && now < v2.wanderPauseUntil) {
+            if (v.status === "idle" && now < v.wanderPauseUntil) {
               continue;
             }
-            v2.wanderPauseUntil = now + 2500 + Math.random() * 3e3;
+            v.wanderPauseUntil = now + 2500 + Math.random() * 3e3;
             target = this.pickWanderTarget(key, prof);
             this.wanderTargets.set(key, target);
           }
           this.moveVillager(key, el, prof, target.x, target.y);
-          if (v2.status === "idle") {
+          if (v.status === "idle") {
             const tagEl = el.querySelector(".ai-village-villager-tag");
             if (tagEl) {
               const idleLine = prof.idle[Math.floor(Math.random() * prof.idle.length)];
-              tagEl.setText(`${v2.name} ${idleLine}`);
+              tagEl.setText(`${v.name} ${idleLine}`);
             }
           }
         }
@@ -3385,9 +3604,9 @@ var require_village_view = __commonJS({
       pickWanderTarget(key, prof) {
         if (Math.random() < 0.25) {
           const anchor = VILLAGE_BUILDINGS[prof.building];
-          return this.jitter(anchor, key + Math.random());
+          return this.jitterIso(anchor, key + Math.random());
         }
-        return { x: 8 + Math.random() * 84, y: 8 + Math.random() * 84 };
+        return cartesianToIso(8 + Math.random() * 84, 8 + Math.random() * 84);
       }
       chatTick() {
         const village = this.plugin.village;
@@ -3406,9 +3625,9 @@ var require_village_view = __commonJS({
         }
         if (night) return;
         const candidates = [];
-        for (const [key, v2] of village.villagers) {
-          if (v2.isSubagent) continue;
-          if (v2.status !== "idle") continue;
+        for (const [key, v] of village.villagers) {
+          if (v.isSubagent) continue;
+          if (v.status !== "idle") continue;
           if (this.villagerHidden.has(key) || this.chattingUntil.has(key)) continue;
           if ((this.chatCooldown.get(key) || 0) > now) continue;
           const el = this.villagerEls.get(key);
@@ -3416,7 +3635,7 @@ var require_village_view = __commonJS({
           const x = parseFloat(el.style.left);
           const y = parseFloat(el.style.top);
           if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-          candidates.push({ key, v: v2, x, y });
+          candidates.push({ key, v, x, y });
         }
         for (let i = 0; i < candidates.length; i++) {
           const a = candidates[i];
@@ -3464,13 +3683,13 @@ var require_village_view = __commonJS({
           this.diagPanel.style.display = "none";
         });
         let hasEntries = false;
-        for (const [key, v2] of village.villagers) {
-          if (!v2.toolHistory || v2.toolHistory.length === 0) continue;
+        for (const [key, v] of village.villagers) {
+          if (!v.toolHistory || v.toolHistory.length === 0) continue;
           hasEntries = true;
           const section = this.diagPanel.createDiv({ cls: "ai-village-diag-agent" });
-          section.createDiv({ cls: "ai-village-diag-agent-name", text: v2.name });
+          section.createDiv({ cls: "ai-village-diag-agent-name", text: v.name });
           const list = section.createDiv({ cls: "ai-village-diag-list" });
-          const recent = v2.toolHistory.slice(-10);
+          const recent = v.toolHistory.slice(-10);
           for (const entry of recent) {
             const row = list.createDiv({ cls: `ai-village-diag-entry ${entry.status === "error" ? "is-error" : ""}` });
             const toolSpan = row.createSpan({ cls: "ai-village-diag-tool", text: entry.tool });
@@ -3495,27 +3714,27 @@ var require_village_view = __commonJS({
           this.subagentEl.createDiv({ cls: "ai-village-agent-row", text: "No agents in the village." });
           return;
         }
-        for (const v2 of agents) {
-          const row = this.subagentEl.createDiv({ cls: `ai-village-agent-row ${v2.isSubagent ? "is-subagent" : ""}` });
-          const prof = VILLAGE_PROFESSIONS[v2.professionKey];
+        for (const v of agents) {
+          const row = this.subagentEl.createDiv({ cls: `ai-village-agent-row ${v.isSubagent ? "is-subagent" : ""}` });
+          const prof = VILLAGE_PROFESSIONS[v.professionKey];
           const emoji = prof ? prof.emoji : "\u{1F464}";
-          const badge = v2.isSubagent ? "\u22B6 " : "";
-          const parentInfo = v2.isSubagent && v2.parentKey ? ` (for ${village.villagers.get(v2.parentKey)?.name || v2.parentKey})` : "";
+          const badge = v.isSubagent ? "\u22B6 " : "";
+          const parentInfo = v.isSubagent && v.parentKey ? ` (for ${village.villagers.get(v.parentKey)?.name || v.parentKey})` : "";
           row.createSpan({ cls: "ai-village-agent-emoji", text: `${badge}${emoji}` });
-          row.createSpan({ cls: "ai-village-agent-name", text: `${v2.name}${parentInfo}` });
-          const statusSpan = row.createSpan({ cls: "ai-village-agent-status", text: ` ${v2.status}${v2.subStatus ? `:${v2.subStatus}` : ""}` });
-          if (v2.status === "error") statusSpan.addClass("is-error");
-          else if (v2.status === "finished") statusSpan.addClass("is-finished");
-          if (v2.taskText) {
-            row.createSpan({ cls: "ai-village-agent-task", text: ` "${v2.taskText.slice(0, 60)}"` });
+          row.createSpan({ cls: "ai-village-agent-name", text: `${v.name}${parentInfo}` });
+          const statusSpan = row.createSpan({ cls: "ai-village-agent-status", text: ` ${v.status}${v.subStatus ? `:${v.subStatus}` : ""}` });
+          if (v.status === "error") statusSpan.addClass("is-error");
+          else if (v.status === "finished") statusSpan.addClass("is-finished");
+          if (v.taskText) {
+            row.createSpan({ cls: "ai-village-agent-task", text: ` "${v.taskText.slice(0, 60)}"` });
           }
         }
       }
-      ensureVillagerEl(key, v2) {
+      ensureVillagerEl(key, v) {
         let el = this.villagerEls.get(key);
         if (el) return el;
-        const prof = VILLAGE_PROFESSIONS[v2.professionKey];
-        const isSub = v2.isSubagent;
+        const prof = VILLAGE_PROFESSIONS[v.professionKey];
+        const isSub = v.isSubagent;
         el = this.spriteLayerEl.createDiv({ cls: `ai-village-villager ${isSub ? "is-subagent" : ""}` });
         if (prof && prof.spriteDir && !isSub) {
           const sprite = el.createDiv({ cls: "ai-village-villager-sprite" });
@@ -3543,13 +3762,13 @@ var require_village_view = __commonJS({
         el.createDiv({ cls: "ai-village-villager-mood", text: "\u{1F642}" });
         const bubbleEl = el.createDiv({ cls: "ai-village-villager-bubble" });
         bubbleEl.style.display = "none";
-        el.createDiv({ cls: "ai-village-villager-tag", text: v2.name });
+        el.createDiv({ cls: "ai-village-villager-tag", text: v.name });
         el.createDiv({ cls: "ai-village-villager-activity" });
         el.addEventListener("click", (e) => {
           e.stopPropagation();
-          const v3 = this.plugin.village.villagers.get(key);
-          if (v3 && v3.bubble && v3.bubble.text) {
-            bubbleEl.setText(`${v3.bubble.icon || ""} ${v3.bubble.text}`.trim());
+          const v2 = this.plugin.village.villagers.get(key);
+          if (v2 && v2.bubble && v2.bubble.text) {
+            bubbleEl.setText(`${v2.bubble.icon || ""} ${v2.bubble.text}`.trim());
             bubbleEl.style.display = "block";
             el.addClass("has-bubble");
             setTimeout(() => {
@@ -3561,9 +3780,9 @@ var require_village_view = __commonJS({
         let touchTimer = null;
         el.addEventListener("touchstart", (e) => {
           touchTimer = setTimeout(() => {
-            const v3 = this.plugin.village.villagers.get(key);
-            if (v3 && v3.bubble && v3.bubble.text) {
-              bubbleEl.setText(`${v3.bubble.icon || ""} ${v3.bubble.text}`.trim());
+            const v2 = this.plugin.village.villagers.get(key);
+            if (v2 && v2.bubble && v2.bubble.text) {
+              bubbleEl.setText(`${v2.bubble.icon || ""} ${v2.bubble.text}`.trim());
               bubbleEl.style.display = "block";
               el.addClass("has-bubble");
               setTimeout(() => {
@@ -3580,7 +3799,7 @@ var require_village_view = __commonJS({
           if (touchTimer) clearTimeout(touchTimer);
         }, { passive: true });
         const anchor = prof ? VILLAGE_BUILDINGS[prof.building] : { x: 50, y: 50 };
-        const pos = prof ? this.jitter(anchor, key) : { x: 20 + Math.random() * 60, y: 20 + Math.random() * 60 };
+        const pos = prof ? this.jitterIso(anchor, key) : { x: 20 + Math.random() * 60, y: 20 + Math.random() * 60 };
         el.style.left = `${pos.x}%`;
         el.style.top = `${pos.y}%`;
         if (isSub) {
@@ -3601,19 +3820,19 @@ var require_village_view = __commonJS({
           collaboratingKeys.add(m.toKey);
         }
         const buildingStatus = /* @__PURE__ */ new Map();
-        for (const [key, v2] of village.villagers) {
-          const el = this.ensureVillagerEl(key, v2);
-          const prof = VILLAGE_PROFESSIONS[v2.professionKey];
-          if (v2.status !== "idle" && this.chattingUntil.has(key)) {
+        for (const [key, v] of village.villagers) {
+          const el = this.ensureVillagerEl(key, v);
+          const prof = VILLAGE_PROFESSIONS[v.professionKey];
+          if (v.status !== "idle" && this.chattingUntil.has(key)) {
             this.chattingUntil.delete(key);
             el.removeClass("is-chatting");
             const bubble = el.querySelector(".ai-village-villager-bubble");
             if (bubble) bubble.setText("");
           }
-          el.className = `ai-village-villager status-${v2.status}`;
-          if (v2.isSubagent) el.addClass("is-subagent");
+          el.className = `ai-village-villager status-${v.status}`;
+          if (v.isSubagent) el.addClass("is-subagent");
           el.toggleClass("sprite-failed", this.spriteFailed.has(key));
-          const sleeping = night && v2.status === "idle";
+          const sleeping = night && v.status === "idle";
           const collaborating = collaboratingKeys.has(key);
           const chatting = this.chattingUntil.has(key);
           el.toggleClass("is-sleeping", sleeping);
@@ -3621,31 +3840,35 @@ var require_village_view = __commonJS({
           el.toggleClass("is-hidden", this.villagerHidden.has(key));
           el.toggleClass("is-chatting", chatting);
           el.querySelector(".ai-village-villager-mood").setText(
-            villageMoodIcon(v2.status, v2.subStatus, sleeping ? "sleeping" : chatting ? "chatting" : collaborating ? "collaborating" : null)
+            villageMoodIcon(v.status, v.subStatus, sleeping ? "sleeping" : chatting ? "chatting" : collaborating ? "collaborating" : null)
           );
+          const sl = skillLevel(v.experience || 0);
+          const lvlBadge = v.experience > 0 ? ` [${sl.title.slice(0, 4)}]` : "";
           const tagEl = el.querySelector(".ai-village-villager-tag");
-          if (v2.isSubagent) {
-            tagEl.setText(`[sub] ${v2.taskText || v2.name}`);
-          } else if (v2.status === "walking") {
-            tagEl.setText(`${v2.name} is on the move`);
-          } else if (v2.status === "working" || v2.status === "reviewing" || v2.status === "waiting" || v2.status === "error") {
-            tagEl.setText(v2.taskText ? `${v2.name}: ${v2.taskText}` : v2.name);
-          } else if (v2.status === "meeting") {
-            tagEl.setText(v2.taskText ? `${v2.name}: ${v2.taskText}` : `${v2.name} at the Town Hall`);
-          } else if (v2.status === "finished") {
-            tagEl.setText(`${v2.name} \u2713 ${v2.taskText || "done"}`);
+          if (v.isSubagent) {
+            tagEl.setText(`[sub] ${v.taskText || v.name}`);
+          } else if (v.status === "walking") {
+            tagEl.setText(`${v.name}${lvlBadge} is on the move`);
+          } else if (v.status === "working" || v.status === "reviewing" || v.status === "waiting" || v.status === "error") {
+            tagEl.setText(v.taskText ? `${v.name}${lvlBadge}: ${v.taskText}` : `${v.name}${lvlBadge}`);
+          } else if (v.status === "meeting") {
+            tagEl.setText(v.taskText ? `${v.name}${lvlBadge}: ${v.taskText}` : `${v.name}${lvlBadge} at the Town Hall`);
+          } else if (v.status === "finished") {
+            tagEl.setText(`${v.name}${lvlBadge} \u2713 ${v.taskText || "done"}`);
           } else if (sleeping) {
-            tagEl.setText(`${v2.name} is asleep`);
+            tagEl.setText(`${v.name}${lvlBadge} is asleep`);
           } else {
-            tagEl.setText(v2.name);
+            tagEl.setText(`${v.name}${lvlBadge}`);
           }
+          el.toggleClass("is-master", sl.level >= 4);
+          el.toggleClass("is-expert", sl.level >= 3 && sl.level < 4);
           const activityEl = el.querySelector(".ai-village-villager-activity");
-          if (v2.subStatus === "reading") {
+          if (v.subStatus === "reading") {
             activityEl.setText("\u{1F4D6}");
             el.addClass("is-reading");
             el.removeClass("is-writing");
             el.style.transition = "left 3.6s ease-in-out, top 3.6s ease-in-out, opacity 0.5s ease";
-          } else if (v2.subStatus === "writing") {
+          } else if (v.subStatus === "writing") {
             activityEl.setText("\u270D\uFE0F");
             el.addClass("is-writing");
             el.removeClass("is-reading");
@@ -3655,24 +3878,26 @@ var require_village_view = __commonJS({
             el.removeClass("is-reading is-writing");
           }
           const prevStatus = this.prevStatus.get(key);
-          if (v2.status === "walking") {
+          if (v.status === "walking") {
             el.style.transition = "left 1.2s ease-in-out, top 1.2s ease-in-out, opacity 0.5s ease";
-            if (v2.walkTarget) {
-              this.moveVillager(key, el, prof, v2.walkTarget.x, v2.walkTarget.y);
+            if (v.walkTarget) {
+              const iso = cartesianToIso(v.walkTarget.x, v.walkTarget.y);
+              this.moveVillager(key, el, prof, iso.x, iso.y);
             }
-          } else if ((v2.status === "working" || v2.status === "error") && !v2.isSubagent) {
+          } else if ((v.status === "working" || v.status === "error") && !v.isSubagent) {
             el.style.transition = "left 0.9s ease, top 0.9s ease, opacity 0.5s ease";
             let pos = null;
-            if (prof) pos = this.getSeatPosition(prof, v2);
+            if (prof) pos = this.getSeatPosition(prof, v);
             if (!pos) {
               const anchor = prof ? VILLAGE_BUILDINGS[prof.building] : { x: 50, y: 50 };
-              pos = { x: anchor.x, y: anchor.y + 3 };
+              pos = cartesianToIso(anchor.x, anchor.y + 3);
             }
             this.moveVillager(key, el, prof, pos.x, pos.y);
-          } else if (v2.status === "meeting") {
+          } else if (v.status === "meeting") {
             if (prevStatus !== "meeting") {
               const anchor = VILLAGE_BUILDINGS.townhall;
-              this.moveVillager(key, el, prof, anchor.x + this.doorStagger(key), anchor.y + 3);
+              const isoMeeting = cartesianToIso(anchor.x + this.doorStagger(key), anchor.y + 3);
+              this.moveVillager(key, el, prof, isoMeeting.x, isoMeeting.y);
               this.villagerHidden.delete(key);
               el.removeClass("is-hidden");
               clearTimeout(this.meetingTimers.get(key));
@@ -3689,22 +3914,23 @@ var require_village_view = __commonJS({
             if (prof) {
               const anchor = VILLAGE_BUILDINGS[prof.building];
               const homeTimer = window.setTimeout(() => {
-                this.moveVillager(key, el, prof, anchor.x, anchor.y + 3);
+                const isoHome = cartesianToIso(anchor.x, anchor.y + 3);
+                this.moveVillager(key, el, prof, isoHome.x, isoHome.y);
               }, 650);
               this.meetingTimers.set(key, homeTimer);
             }
           }
-          this.prevStatus.set(key, v2.status);
-          const bKey = v2.status === "meeting" ? "townhall" : prof ? prof.building : null;
+          this.prevStatus.set(key, v.status);
+          const bKey = v.status === "meeting" ? "townhall" : prof ? prof.building : null;
           if (bKey) {
-            const rank = VILLAGE_STATUS_PRIORITY.indexOf(v2.status);
+            const rank = VILLAGE_STATUS_PRIORITY.indexOf(v.status);
             const cur = buildingStatus.get(bKey);
             if (cur === void 0 || rank < VILLAGE_STATUS_PRIORITY.indexOf(cur)) {
-              buildingStatus.set(bKey, v2.status);
+              buildingStatus.set(bKey, v.status);
             }
           }
         }
-        const activeCount = Array.from(village.villagers.values()).filter((v2) => v2.status === "working" && !v2.isSubagent).length;
+        const activeCount = Array.from(village.villagers.values()).filter((v) => v.status === "working" && !v.isSubagent).length;
         this.sceneEl.toggleClass("is-busy", activeCount >= 3);
         for (const [key, el] of this.buildingEls) {
           const status = buildingStatus.get(key);
@@ -3718,15 +3944,17 @@ var require_village_view = __commonJS({
             const toProf = VILLAGE_PROFESSIONS[village.villagers.get(m.toKey)?.professionKey || "mayor"];
             const fromB = fromProf ? VILLAGE_BUILDINGS[fromProf.building] : { x: 50, y: 50 };
             const toB = toProf ? VILLAGE_BUILDINGS[toProf.building] : { x: 50, y: 50 };
+            const fromIso = cartesianToIso(fromB.x, fromB.y);
+            const toIso = cartesianToIso(toB.x, toB.y);
             const el = this.spriteLayerEl.createDiv({ cls: "ai-village-messenger", text: "\u{1F4DC}" });
-            el.style.left = `${fromB.x}%`;
-            el.style.top = `${fromB.y}%`;
+            el.style.left = `${fromIso.x}%`;
+            el.style.top = `${fromIso.y}%`;
             this.spriteLayerEl.appendChild(el);
             this.messengerEls.set(m.id, el);
             requestAnimationFrame(() => {
               requestAnimationFrame(() => {
-                el.style.left = `${toB.x}%`;
-                el.style.top = `${toB.y}%`;
+                el.style.left = `${toIso.x}%`;
+                el.style.top = `${toIso.y}%`;
               });
             });
           }
@@ -3735,6 +3963,22 @@ var require_village_view = __commonJS({
           if (!liveIds.has(id)) {
             el.remove();
             this.messengerEls.delete(id);
+          }
+        }
+        for (const el of this.spriteLayerEl.children) {
+          const top = parseFloat(el.style.top);
+          if (Number.isFinite(top)) {
+            el.style.zIndex = Math.round(top * 20);
+          }
+        }
+        if (this.taskQueueEl) {
+          const qlen = village.taskQueueLength ? village.taskQueueLength() : 0;
+          if (qlen > 0) {
+            this.taskQueueEl.setText(`\u{1F4CB} ${qlen}`);
+            this.taskQueueEl.addClass("has-queued");
+          } else {
+            this.taskQueueEl.setText("");
+            this.taskQueueEl.removeClass("has-queued");
           }
         }
         this.feedEl.empty();
@@ -3914,7 +4158,7 @@ var require_settings_tab = __commonJS({
     "use strict";
     var { PluginSettingTab, Setting } = require("obsidian");
     var { OrganizeModal: OrganizeModal2 } = require_organize_modal();
-    var AIChatSettingTab2 = class extends PluginSettingTab {
+    var KlauSettingTab2 = class extends PluginSettingTab {
       constructor(app, plugin) {
         super(app, plugin);
         this.plugin = plugin;
@@ -3922,7 +4166,7 @@ var require_settings_tab = __commonJS({
       display() {
         const { containerEl } = this;
         containerEl.empty();
-        containerEl.createEl("h2", { text: "AI Chat Sidebar Settings" });
+        containerEl.createEl("h2", { text: "klauAI Settings" });
         containerEl.createEl("p", {
           text: "Authentication currently uses API keys, pasted in below. OAuth-style account login is planned for a future version and will sit alongside key-based auth, not replace it.",
           cls: "setting-item-description"
@@ -3944,7 +4188,7 @@ var require_settings_tab = __commonJS({
             await this.plugin.saveSettings();
           });
         });
-        containerEl.createEl("h3", { text: "AI Village" });
+        containerEl.createEl("h3", { text: "klauAI Village" });
         containerEl.createEl("p", {
           text: "Every AI villager \u2014 the chat sidebar as the Innkeeper, the Organize command as the Librarian, and every solo or team Agent (a solo Agent is the Mayor; team members map onto the rest of the 19-villager roster) \u2014 shows up here as a character going about a medieval settlement. It only reflects activity from the other three features; it never calls an AI provider itself.",
           cls: "setting-item-description"
@@ -3971,16 +4215,16 @@ var require_settings_tab = __commonJS({
             }
           });
         });
-        containerEl.createEl("h3", { text: "AI Agent" });
+        containerEl.createEl("h3", { text: "klauAI Agent" });
         containerEl.createEl("p", {
           text: "The agent works through multi-step goals on its own \u2014 reading, searching, writing, tagging, moving, renaming, deleting \u2014 but by default it pauses and waits for your approval before any actual file change, and you can edit the details (new content, tags, path) right in the approval prompt before confirming. Deleting only ever moves a note to the trash, never a permanent delete.",
           cls: "setting-item-description"
         });
-        new Setting(containerEl).setName("Max steps per run").setDesc("Safety limit on how many tool calls the agent can make for one goal.").addText((text) => {
+        new Setting(containerEl).setName("Max steps per run").setDesc("Safety limit on how many tool calls the agent can make for one goal. Set to -1 for unlimited.").addText((text) => {
           text.setValue(String(this.plugin.settings.agentMaxSteps));
           text.onChange(async (value) => {
             const n = parseInt(value, 10);
-            if (!isNaN(n) && n > 0) {
+            if (!isNaN(n) && n >= -1) {
               this.plugin.settings.agentMaxSteps = n;
               await this.plugin.saveSettings();
             }
@@ -4046,11 +4290,56 @@ var require_settings_tab = __commonJS({
             const id = "provider-" + Date.now();
             this.plugin.settings.providers.push({
               id,
-              name: "New provider",
-              type: "openai-compatible",
+              name: "Ollama (local)",
+              type: "self-hosted",
               apiKey: "",
-              baseUrl: "https://api.openai.com/v1",
-              model: "gpt-4o"
+              baseUrl: "http://localhost:11434/v1",
+              model: "llama3.1"
+            });
+            await this.plugin.saveSettings();
+            this.display();
+          });
+        });
+        new Setting(containerEl).addButton((btn) => {
+          btn.setButtonText("Add LM Studio").onClick(async () => {
+            const id = "provider-" + Date.now();
+            this.plugin.settings.providers.push({
+              id,
+              name: "LM Studio (local)",
+              type: "lmstudio",
+              apiKey: "",
+              baseUrl: "http://localhost:1234/v1",
+              model: "local-model"
+            });
+            await this.plugin.saveSettings();
+            this.display();
+          });
+        });
+        new Setting(containerEl).addButton((btn) => {
+          btn.setButtonText("Add ZeroLLM").onClick(async () => {
+            const id = "provider-" + Date.now();
+            this.plugin.settings.providers.push({
+              id,
+              name: "ZeroLLM (local)",
+              type: "zerollm",
+              apiKey: "",
+              baseUrl: "http://localhost:8000/v1",
+              model: "qwen2.5-7b"
+            });
+            await this.plugin.saveSettings();
+            this.display();
+          });
+        });
+        new Setting(containerEl).addButton((btn) => {
+          btn.setButtonText("Add Transformers.js (In-browser)").onClick(async () => {
+            const id = "provider-" + Date.now();
+            this.plugin.settings.providers.push({
+              id,
+              name: "Transformers.js (In-browser)",
+              type: "transformers-js",
+              apiKey: "",
+              baseUrl: "local://transformers-js",
+              model: "Xenova/Phi-3.5-mini-instruct"
             });
             await this.plugin.saveSettings();
             this.display();
@@ -4096,14 +4385,29 @@ var require_settings_tab = __commonJS({
         new Setting(box).setName("Type").addDropdown((drop) => {
           drop.addOption("anthropic", "Claude (Anthropic API)");
           drop.addOption("openai-compatible", "OpenAI-compatible endpoint");
+          drop.addOption("self-hosted", "Ollama (http://localhost:11434/v1)");
+          drop.addOption("lmstudio", "LM Studio (http://localhost:1234/v1)");
+          drop.addOption("zerollm", "ZeroLLM (http://localhost:8000/v1)");
+          drop.addOption("tgi", "Text-Generation-Inference (http://localhost:8080/v1)");
+          drop.addOption("llamacpp", "llama.cpp server (http://localhost:8080/v1)");
+          drop.addOption("transformers-js", "Transformers.js (in-browser, no server)");
           drop.setValue(provider.type);
           drop.onChange(async (value) => {
             provider.type = value;
+            if (value === "self-hosted" && !provider.baseUrl) provider.baseUrl = "http://localhost:11434/v1";
+            if (value === "lmstudio" && !provider.baseUrl) provider.baseUrl = "http://localhost:1234/v1";
+            if (value === "zerollm" && !provider.baseUrl) provider.baseUrl = "http://localhost:8000/v1";
+            if (value === "tgi" && !provider.baseUrl) provider.baseUrl = "http://localhost:8080/v1";
+            if (value === "llamacpp" && !provider.baseUrl) provider.baseUrl = "http://localhost:8080/v1";
+            if (value === "transformers-js") {
+              provider.baseUrl = "local://transformers-js";
+              if (!provider.model) provider.model = "Xenova/Phi-3.5-mini-instruct";
+            }
             await this.plugin.saveSettings();
             this.display();
           });
         });
-        new Setting(box).setName("API key").addText((text) => {
+        const apiKeySetting = new Setting(box).setName("API key").addText((text) => {
           text.inputEl.type = "password";
           text.setValue(provider.apiKey);
           text.onChange(async (value) => {
@@ -4111,9 +4415,16 @@ var require_settings_tab = __commonJS({
             await this.plugin.saveSettings();
           });
         });
+        const noKeyTypes = ["self-hosted", "lmstudio", "zerollm", "tgi", "llamacpp", "transformers-js"];
+        if (noKeyTypes.includes(provider.type)) {
+          apiKeySetting.setDesc("Not needed for this provider type");
+          apiKeySetting.settingEl.style.opacity = "0.5";
+        } else {
+          apiKeySetting.settingEl.style.opacity = "1";
+        }
         this.renderSavedApiKeys(box, provider);
         new Setting(box).setName("Base URL").setDesc(
-          provider.type === "anthropic" ? "Usually https://api.anthropic.com" : "e.g. https://api.openai.com/v1, or your self-hosted / local endpoint"
+          provider.type === "anthropic" ? "Usually https://api.anthropic.com" : provider.type === "self-hosted" ? "Ollama: http://localhost:11434/v1" : provider.type === "lmstudio" ? "LM Studio: http://localhost:1234/v1" : provider.type === "zerollm" ? "ZeroLLM: http://localhost:8000/v1" : provider.type === "tgi" ? "TGI: http://localhost:8080/v1" : provider.type === "llamacpp" ? "llama.cpp: http://localhost:8080/v1" : provider.type === "transformers-js" ? "Runs in browser (WebGPU/WASM) \u2014 no server needed" : "e.g. https://api.openai.com/v1, or your self-hosted / local endpoint"
         ).addText((text) => {
           text.setValue(provider.baseUrl);
           text.onChange(async (value) => {
@@ -4128,11 +4439,11 @@ var require_settings_tab = __commonJS({
             await this.plugin.saveSettings();
           });
         });
-        new Setting(box).setName("Max output tokens").setDesc("Maximum tokens per response. Default: -1 (unlimited).").addText((text) => {
+        new Setting(box).setName("Max output tokens").setDesc("Maximum tokens per response. Set to -1 for unlimited. Default: -1.").addText((text) => {
           text.setValue(String(provider.maxTokens || -1));
           text.onChange(async (value) => {
             const n = parseInt(value, 10);
-            if (!isNaN(n) && n > 0) {
+            if (!isNaN(n) && n >= -1) {
               provider.maxTokens = n;
               await this.plugin.saveSettings();
             }
@@ -4223,7 +4534,7 @@ var require_settings_tab = __commonJS({
         });
       }
     };
-    module2.exports = { AIChatSettingTab: AIChatSettingTab2 };
+    module2.exports = { KlauSettingTab: KlauSettingTab2 };
   }
 });
 
@@ -4303,23 +4614,23 @@ var require_agent_status_bar = __commonJS({
       update() {
         const village = this.plugin.village;
         if (!village) return;
-        const agents = Array.from(village.villagers.values()).filter((v2) => !v2.isSubagent).filter((v2) => v2.status !== "idle" || v2.subStatus);
+        const agents = Array.from(village.villagers.values()).filter((v) => !v.isSubagent).filter((v) => v.status !== "idle" || v.subStatus);
         const itemsEl = this.containerEl.querySelector(".ai-agent-status-bar-items");
         if (!itemsEl) return;
         if (agents.length === 0) {
           itemsEl.innerHTML = '<span class="ai-agent-status-bar-idle">All idle</span>';
           return;
         }
-        itemsEl.innerHTML = agents.map((v2) => {
-          const prof = VILLAGE_PROFESSIONS[v2.professionKey];
+        itemsEl.innerHTML = agents.map((v) => {
+          const prof = VILLAGE_PROFESSIONS[v.professionKey];
           const emoji = prof ? prof.emoji : "\u{1F464}";
-          const statusIcon = this.getStatusIcon(v2.status, v2.subStatus);
-          const isWaiting = v2.status === "waiting" || v2.status === "error";
+          const statusIcon = this.getStatusIcon(v.status, v.subStatus);
+          const isWaiting = v.status === "waiting" || v.status === "error";
           return `
         <span class="ai-agent-status-bar-agent ${isWaiting ? "needs-attention" : ""}" 
-              data-key="${v2.key}"
-              title="${v2.name}: ${v2.status}${v2.subStatus ? ":" + v2.subStatus : ""}${v2.taskText ? " - " + v2.taskText.slice(0, 40) : ""}">
-          ${emoji} ${statusIcon} ${v2.name}
+              data-key="${v.key}"
+              title="${v.name}: ${v.status}${v.subStatus ? ":" + v.subStatus : ""}${v.taskText ? " - " + v.taskText.slice(0, 40) : ""}">
+          ${emoji} ${statusIcon} ${v.name}
         </span>
       `;
         }).join("");
@@ -4353,22 +4664,22 @@ var require_agent_status_bar = __commonJS({
       renderExpanded() {
         const village = this.plugin.village;
         if (!village) return;
-        const agents = Array.from(village.villagers.values()).filter((v2) => !v2.isSubagent);
+        const agents = Array.from(village.villagers.values()).filter((v) => !v.isSubagent);
         const listEl = this.containerEl.querySelector(".ai-agent-status-bar-expanded-list");
         if (!listEl) return;
-        listEl.innerHTML = agents.map((v2) => {
-          const prof = VILLAGE_PROFESSIONS[v2.professionKey];
+        listEl.innerHTML = agents.map((v) => {
+          const prof = VILLAGE_PROFESSIONS[v.professionKey];
           const emoji = prof ? prof.emoji : "\u{1F464}";
-          const statusIcon = this.getStatusIcon(v2.status, v2.subStatus);
-          const isWaiting = v2.status === "waiting" || v2.status === "error";
+          const statusIcon = this.getStatusIcon(v.status, v.subStatus);
+          const isWaiting = v.status === "waiting" || v.status === "error";
           return `
-        <div class="ai-agent-status-bar-expanded-item ${isWaiting ? "needs-attention" : ""}" data-key="${v2.key}">
+        <div class="ai-agent-status-bar-expanded-item ${isWaiting ? "needs-attention" : ""}" data-key="${v.key}">
           <div class="ai-agent-status-bar-expanded-main">
             <span class="ai-agent-status-bar-expanded-emoji">${emoji}</span>
-            <span class="ai-agent-status-bar-expanded-name">${v2.name}</span>
-            <span class="ai-agent-status-bar-expanded-status">${statusIcon} ${v2.status}${v2.subStatus ? ":" + v2.subStatus : ""}</span>
+            <span class="ai-agent-status-bar-expanded-name">${v.name}</span>
+            <span class="ai-agent-status-bar-expanded-status">${statusIcon} ${v.status}${v.subStatus ? ":" + v.subStatus : ""}</span>
           </div>
-          ${v2.taskText ? `<div class="ai-agent-status-bar-expanded-task">${v2.taskText.slice(0, 80)}</div>` : ""}
+          ${v.taskText ? `<div class="ai-agent-status-bar-expanded-task">${v.taskText.slice(0, 80)}</div>` : ""}
         </div>
       `;
         }).join("");
@@ -4381,20 +4692,20 @@ var require_agent_status_bar = __commonJS({
       }
       showAgentDetails(key) {
         const village = this.plugin.village;
-        const v2 = village?.villagers.get(key);
-        if (!v2) return;
+        const v = village?.villagers.get(key);
+        if (!v) return;
         const toast = document.createElement("div");
         toast.className = "ai-agent-status-bar-toast";
         toast.innerHTML = `
       <div class="ai-agent-status-bar-toast-content">
         <div class="ai-agent-status-bar-toast-header">
-          <span>${VILLAGE_PROFESSIONS[v2.professionKey]?.emoji || "\u{1F464}"} ${v2.name}</span>
+          <span>${VILLAGE_PROFESSIONS[v.professionKey]?.emoji || "\u{1F464}"} ${v.name}</span>
           <button class="ai-agent-status-bar-toast-close">\xD7</button>
         </div>
         <div class="ai-agent-status-bar-toast-body">
-          <div><strong>Status:</strong> ${v2.status}${v2.subStatus ? ":" + v2.subStatus : ""}</div>
-          ${v2.taskText ? `<div><strong>Task:</strong> ${v2.taskText}</div>` : ""}
-          ${v2.bubble ? `<div><strong>Message:</strong> ${v2.bubble.icon || ""} ${v2.bubble.text}</div>` : ""}
+          <div><strong>Status:</strong> ${v.status}${v.subStatus ? ":" + v.subStatus : ""}</div>
+          ${v.taskText ? `<div><strong>Task:</strong> ${v.taskText}</div>` : ""}
+          ${v.bubble ? `<div><strong>Message:</strong> ${v.bubble.icon || ""} ${v.bubble.text}</div>` : ""}
         </div>
       </div>
     `;
@@ -4434,13 +4745,13 @@ var { requestOrganizePlan } = require_organize();
 var { VillageStore } = require_village_store();
 var { EventBus } = require_event_bus();
 var { MemoryManager } = require_memory_manager();
-var { AIChatView } = require_chat_view();
+var { KlauChatView } = require_chat_view();
 var { AgentView } = require_agent_view();
 var { VillageView } = require_village_view();
 var { OrganizeModal } = require_organize_modal();
-var { AIChatSettingTab } = require_settings_tab();
+var { KlauSettingTab } = require_settings_tab();
 var { AgentStatusBar } = require_agent_status_bar();
-module.exports = class AIChatSidebarPlugin extends Plugin {
+module.exports = class KlauAIPlugin extends Plugin {
   async onload() {
     await this.loadSettings();
     this.eventBus = new EventBus();
@@ -4469,31 +4780,31 @@ module.exports = class AIChatSidebarPlugin extends Plugin {
     this._markdownComponent = new Component();
     this._audioContext = null;
     this._notificationSound = null;
-    this.registerView(VIEW_TYPE_AI_CHAT, (leaf) => new AIChatView(leaf, this));
+    this.registerView(VIEW_TYPE_AI_CHAT, (leaf) => new KlauChatView(leaf, this));
     this.registerView(VIEW_TYPE_AI_AGENT, (leaf) => new AgentView(leaf, this));
     this.registerView(VIEW_TYPE_AI_VILLAGE, (leaf) => new VillageView(leaf, this));
-    this.addRibbonIcon("message-square", "Open AI Chat", () => {
+    this.addRibbonIcon("message-square", "klauAI Chat", () => {
       this.activateView();
     });
-    this.addRibbonIcon("bot", "Open AI Agent", () => {
+    this.addRibbonIcon("bot", "klauAI Agent", () => {
       this.activateAgentView();
     });
-    this.addRibbonIcon("castle", "Open AI Village", () => {
+    this.addRibbonIcon("castle", "klauAI Village", () => {
       this.activateVillageView();
     });
     this.addCommand({
-      id: "open-ai-chat-sidebar",
-      name: "Open AI chat sidebar",
+      id: "klau-ai-chat",
+      name: "Open klauAI chat",
       callback: () => this.activateView()
     });
     this.addCommand({
-      id: "open-ai-agent",
-      name: "Open AI agent",
+      id: "klau-ai-agent",
+      name: "Open klauAI agent",
       callback: () => this.activateAgentView()
     });
     this.addCommand({
-      id: "open-ai-village",
-      name: "Open AI village",
+      id: "klau-ai-village",
+      name: "Open klauAI village",
       callback: () => this.activateVillageView()
     });
     this.addCommand({
@@ -4501,7 +4812,7 @@ module.exports = class AIChatSidebarPlugin extends Plugin {
       name: "Organize vault with AI (preview & confirm)",
       callback: () => new OrganizeModal(this.app, this).open()
     });
-    this.addSettingTab(new AIChatSettingTab(this.app, this));
+    this.addSettingTab(new KlauSettingTab(this.app, this));
     this.agentStatusBar = new AgentStatusBar(this);
     const statusBarContainer = this.app.workspace.containerEl.createDiv({ cls: "ai-agent-status-bar" });
     this.agentStatusBar.create(statusBarContainer);
@@ -4518,7 +4829,7 @@ module.exports = class AIChatSidebarPlugin extends Plugin {
   updateStatusBarVisibility() {
     if (!this._statusBarContainer) return;
     const hasActiveAgents = Array.from(this.village.villagers.values()).some(
-      (v2) => !v2.isSubagent && v2.status !== "idle"
+      (v) => !v.isSubagent && v.status !== "idle"
     );
     const shouldShow = this.isMobile() || hasActiveAgents;
     this._statusBarContainer.toggleClass("visible", shouldShow);

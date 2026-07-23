@@ -20,11 +20,11 @@ const { VillageStore } = require('../village/village-store');
 const { EventBus } = require('./event-bus');
 const { MemoryManager } = require('../memory/memory-manager');
 
-const { AIChatView } = require('../ui/chat-view');
+const { KlauChatView } = require('../ui/chat-view');
 const { AgentView } = require('../ui/agent-view');
 const { VillageView } = require('../ui/village-view');
 const { OrganizeModal } = require('../ui/organize-modal');
-const { AIChatSettingTab } = require('../ui/settings-tab');
+const { KlauSettingTab } = require('../ui/settings-tab');
 const { AgentStatusBar } = require('../ui/agent-status-bar');
 
 /**
@@ -33,7 +33,7 @@ const { AgentStatusBar } = require('../ui/agent-status-bar');
  * requests, the agent loop, vault tools, the organize workflow, village state) is delegated to
  * its own module. This class is the wiring, not the logic.
  */
-module.exports = class AIChatSidebarPlugin extends Plugin {
+module.exports = class KlauAIPlugin extends Plugin {
   async onload() {
     await this.loadSettings();
 
@@ -62,37 +62,37 @@ module.exports = class AIChatSidebarPlugin extends Plugin {
     this._audioContext = null;
     this._notificationSound = null;
 
-    this.registerView(VIEW_TYPE_AI_CHAT, (leaf) => new AIChatView(leaf, this));
+    this.registerView(VIEW_TYPE_AI_CHAT, (leaf) => new KlauChatView(leaf, this));
     this.registerView(VIEW_TYPE_AI_AGENT, (leaf) => new AgentView(leaf, this));
     this.registerView(VIEW_TYPE_AI_VILLAGE, (leaf) => new VillageView(leaf, this));
 
-    this.addRibbonIcon('message-square', 'Open AI Chat', () => {
+    this.addRibbonIcon('message-square', 'klauAI Chat', () => {
       this.activateView();
     });
 
-    this.addRibbonIcon('bot', 'Open AI Agent', () => {
+    this.addRibbonIcon('bot', 'klauAI Agent', () => {
       this.activateAgentView();
     });
 
-    this.addRibbonIcon('castle', 'Open AI Village', () => {
+    this.addRibbonIcon('castle', 'klauAI Village', () => {
       this.activateVillageView();
     });
 
     this.addCommand({
-      id: 'open-ai-chat-sidebar',
-      name: 'Open AI chat sidebar',
+      id: 'klau-ai-chat',
+      name: 'Open klauAI chat',
       callback: () => this.activateView(),
     });
 
     this.addCommand({
-      id: 'open-ai-agent',
-      name: 'Open AI agent',
+      id: 'klau-ai-agent',
+      name: 'Open klauAI agent',
       callback: () => this.activateAgentView(),
     });
 
     this.addCommand({
-      id: 'open-ai-village',
-      name: 'Open AI village',
+      id: 'klau-ai-village',
+      name: 'Open klauAI village',
       callback: () => this.activateVillageView(),
     });
 
@@ -102,7 +102,7 @@ module.exports = class AIChatSidebarPlugin extends Plugin {
       callback: () => new OrganizeModal(this.app, this).open(),
     });
 
-    this.addSettingTab(new AIChatSettingTab(this.app, this));
+    this.addSettingTab(new KlauSettingTab(this.app, this));
 
     // Initialize mobile-friendly agent status bar
     this.agentStatusBar = new AgentStatusBar(this);

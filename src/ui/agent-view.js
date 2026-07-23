@@ -18,7 +18,7 @@ class AgentView extends ItemView {
     return VIEW_TYPE_AI_AGENT;
   }
   getDisplayText() {
-    return 'AI Agent';
+    return 'klauAI Agent';
   }
   getIcon() {
     return 'bot';

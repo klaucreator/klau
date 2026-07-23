@@ -3,7 +3,7 @@
 const { ItemView, Notice } = require('obsidian');
 const { VIEW_TYPE_AI_CHAT } = require('../core/constants');
 
-class AIChatView extends ItemView {
+class KlauChatView extends ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -15,7 +15,7 @@ class AIChatView extends ItemView {
     return VIEW_TYPE_AI_CHAT;
   }
   getDisplayText() {
-    return 'AI Chat';
+    return 'klauAI Chat';
   }
   getIcon() {
     return 'message-square';
@@ -24,7 +24,7 @@ class AIChatView extends ItemView {
   async onOpen() {
     const container = this.containerEl.children[1];
     container.empty();
-    container.addClass('ai-chat-sidebar-container');
+    container.addClass('klau-chat-container');
 
     const header = container.createDiv({ cls: 'ai-chat-header' });
 
@@ -140,7 +140,7 @@ class AIChatView extends ItemView {
         village.setStatus('innkeeper', 'idle', { taskText: 'Stopped' });
       } else {
         bodyEl.setText(`⚠️ Error: ${err.message}`);
-        new Notice(`AI Chat error: ${err.message}`);
+        new Notice(`klauAI chat error: ${err.message}`);
         village.setStatus('innkeeper', 'error', { taskText: err.message.slice(0, 80) });
         village.say('innkeeper', `Ink spilled — ${err.message.slice(0, 70)}`);
       }
@@ -175,4 +175,4 @@ class AIChatView extends ItemView {
   }
 }
 
-module.exports = { AIChatView };
+module.exports = { KlauChatView };

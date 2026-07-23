@@ -1,9 +1,9 @@
 'use strict';
 
 // Obsidian view type identifiers, used to register/find/activate each of the plugin's views.
-const VIEW_TYPE_AI_CHAT = 'ai-chat-sidebar-view';
-const VIEW_TYPE_AI_AGENT = 'ai-agent-sidebar-view';
-const VIEW_TYPE_AI_VILLAGE = 'ai-village-view';
+const VIEW_TYPE_AI_CHAT = 'klau-ai-chat-view';
+const VIEW_TYPE_AI_AGENT = 'klau-ai-agent-view';
+const VIEW_TYPE_AI_VILLAGE = 'klau-ai-village-view';
 
 const DEFAULT_SETTINGS = {
   providers: [

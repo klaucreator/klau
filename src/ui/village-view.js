@@ -74,7 +74,7 @@ class VillageView extends ItemView {
     return VIEW_TYPE_AI_VILLAGE;
   }
   getDisplayText() {
-    return 'AI Village';
+    return 'klauAI Village';
   }
   getIcon() {
     return 'castle';
