@@ -420,6 +420,15 @@
   z-index: 2;
 }
 
+.ai-village-sprite-layer::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255, 255, 240, 0.08) 0%, transparent 50%, rgba(0, 0, 0, 0.08) 100%);
+  pointer-events: none;
+  z-index: 10;
+}
+
 /* --- Buildings --- */
 
 .ai-village-building {
@@ -429,6 +438,17 @@
   height: 14%;
   pointer-events: none;
   z-index: 3;
+}
+
+.ai-village-building::after {
+  content: '';
+  position: absolute;
+  left: -5%;
+  right: 15%;
+  top: 60%;
+  height: 25%;
+  background: radial-gradient(ellipse, rgba(0, 0, 0, 0.25), transparent);
+  pointer-events: none;
 }
 
 .ai-village-building-label {
@@ -527,6 +547,35 @@
   transition: opacity 0.4s ease;
 }
 
+.ai-village-villager.is-expert .ai-village-villager-badge,
+.ai-village-villager.is-expert .ai-village-villager-sprite {
+  filter: drop-shadow(0 0 6px rgba(100, 180, 255, 0.7));
+}
+
+.ai-village-villager.is-master .ai-village-villager-badge,
+.ai-village-villager.is-master .ai-village-villager-sprite {
+  filter: drop-shadow(0 0 10px rgba(255, 200, 50, 0.8));
+  animation: ai-village-pulse 2s ease-in-out infinite;
+}
+
+.ai-village-queue-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-warning, #e0a030);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.ai-village-queue-count.has-queued {
+  opacity: 1;
+  animation: ai-village-queue-pulse 2s ease-in-out infinite;
+}
+
+@keyframes ai-village-queue-pulse {
+  0%, 100% { opacity: 0.7; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
 .ai-village-building.is-working .ai-village-building-bar,
 .ai-village-building.is-reviewing .ai-village-building-bar {
   opacity: 1;
@@ -575,6 +624,17 @@
   z-index: 6;
   text-align: center;
   cursor: default;
+}
+
+.ai-village-villager::after {
+  content: '';
+  position: absolute;
+  left: -15%;
+  right: 25%;
+  top: 60%;
+  height: 20%;
+  background: radial-gradient(ellipse, rgba(0, 0, 0, 0.18), transparent);
+  pointer-events: none;
 }
 
 .ai-village-villager-badge {
@@ -717,10 +777,6 @@
 
 /* --- Walking state --- */
 
-.ai-village-villager.status-walking {
-  z-index: 7;
-}
-
 .ai-village-villager.status-walking .ai-village-villager-sprite {
   animation: ai-village-walk 0.5s ease-in-out infinite;
 }
@@ -787,7 +843,6 @@
   transform: translate(-50%, -50%);
   font-size: 16px;
   transition: left 2.4s linear, top 2.4s linear;
-  z-index: 7;
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
   animation: ai-village-bob 0.5s ease-in-out infinite;
 }

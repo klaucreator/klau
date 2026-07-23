@@ -4,7 +4,7 @@ const { ItemView, Notice } = require('obsidian');
 const { VIEW_TYPE_AI_AGENT } = require('../core/constants');
 const { MUTATING_TOOLS, AGENT_EDITABLE_FIELDS } = require('../tools/tool-metadata');
 const { sleep } = require('../agents/agent-loop');
-const { villageSlug, resolveVillageProfession, VILLAGE_BUILDINGS, VILLAGE_PROFESSIONS } = require('../village/village-roster');
+const { villageSlug, resolveVillageProfession, VILLAGE_BUILDINGS, VILLAGE_PROFESSIONS, skillLevel } = require('../village/village-roster');
 
 class AgentView extends ItemView {
   constructor(leaf, plugin) {
@@ -306,12 +306,22 @@ class AgentView extends ItemView {
   }
 
   async runStage(goalText, roleText, label, villageKey) {
-    const transcript = [{ role: 'user', content: goalText }];
+    const village = this.plugin.village;
+    const vkey = villageKey || 'mayor';
+    const v = village.villagers.get(vkey);
+    const exp = v ? v.experience || 0 : 0;
+    const sl = skillLevel(exp);
+    const lessons = village.getLessons(vkey);
+    let experienceContext = `You have completed ${exp} task(s) — skill level: ${sl.title} (Lvl ${sl.level}).`;
+    if (lessons) {
+      experienceContext += `\n\nThings you learned from past tasks:\n${lessons}`;
+    }
+    const enrichedGoal = `${experienceContext}\n\nYour goal:\n${goalText}`;
+
+    const transcript = [{ role: 'user', content: enrichedGoal }];
     const maxSteps = this.plugin.settings.agentMaxSteps || -1;
     let steps = 0;
     const prefix = label ? `[${label}] ` : '';
-    const village = this.plugin.village;
-    const vkey = villageKey || 'mayor';
 
     village.setBubble(vkey, '💭', 'Getting started...', 0);
     village.setStatus(vkey, 'working', { taskText: 'Getting started...', subStatus: 'thinking' });
@@ -361,6 +371,7 @@ class AgentView extends ItemView {
         village.setStatus(vkey, 'finished', { taskText: 'Done', bubble: null });
         village.addToolEntry(vkey, 'final', {}, 'done', parsed.final.slice(0, 100));
         village.say(vkey, parsed.final.slice(0, 90));
+        village.recordTaskComplete(vkey, parsed.final.slice(0, 120));
         this.setStepCounter('');
         return parsed.final;
       }

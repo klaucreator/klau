@@ -2,7 +2,7 @@
 
 const { ItemView } = require('obsidian');
 const { VIEW_TYPE_AI_VILLAGE } = require('../core/constants');
-const { VILLAGE_BUILDINGS, VILLAGE_PROFESSIONS, VILLAGE_SMALLTALK } = require('../village/village-roster');
+const { VILLAGE_BUILDINGS, VILLAGE_PROFESSIONS, VILLAGE_SMALLTALK, skillLevel } = require('../village/village-roster');
 
 const VILLAGE_STATUS_PRIORITY = ['error', 'walking', 'working', 'meeting', 'reviewing', 'waiting', 'finished', 'idle'];
 const VILLAGE_TICK_MS = 200;
@@ -25,6 +25,16 @@ function villageMoodIcon(status, subStatus, extra) {
 }
 
 const VILLAGE_SPRITE_DIRS = ['east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'north', 'north-east'];
+function cartesianToIsoX(x, y) {
+  return (x - y) * 0.5 + 50;
+}
+function cartesianToIsoY(x, y) {
+  return (x + y) * 0.25 + 25;
+}
+function cartesianToIso(x, y) {
+  return { x: cartesianToIsoX(x, y), y: cartesianToIsoY(x, y) };
+}
+
 function villageDirectionFor(dx, dy) {
   if (Math.abs(dx) < 0.05 && Math.abs(dy) < 0.05) return null;
   const angle = Math.atan2(dy, dx) * (180 / Math.PI);
@@ -79,6 +89,7 @@ class VillageView extends ItemView {
     toolbar.createDiv({ cls: 'ai-village-title', text: 'The Village' });
     const legend = toolbar.createDiv({ cls: 'ai-village-legend' });
     legend.createSpan({ text: '⚙️ working  🗣️ meeting  💭 reviewing  ⌛ waiting  ✨ finished  ⚠️ error  🚶 walking' });
+    this.taskQueueEl = toolbar.createSpan({ cls: 'ai-village-queue-count', text: '' });
     this.diagBtn = toolbar.createEl('button', { cls: 'ai-village-diag-btn', text: '📋 Tools' });
     this.diagBtn.addEventListener('click', () => this.toggleDiagnostics());
     this.nightBtn = toolbar.createEl('button', { cls: 'ai-village-night-toggle', text: '🌓 Auto' });
@@ -118,8 +129,9 @@ class VillageView extends ItemView {
 
     for (const [key, b] of Object.entries(VILLAGE_BUILDINGS)) {
       const el = this.spriteLayerEl.createDiv({ cls: 'ai-village-building' });
-      el.style.left = `${b.x}%`;
-      el.style.top = `${b.y}%`;
+      const ib = cartesianToIso(b.x, b.y);
+      el.style.left = `${ib.x}%`;
+      el.style.top = `${ib.y}%`;
       el.createDiv({ cls: 'ai-village-building-glow' });
       el.createDiv({ cls: 'ai-village-building-smoke' });
       const bar = el.createDiv({ cls: 'ai-village-building-bar' });
@@ -262,7 +274,7 @@ class VillageView extends ItemView {
       if (building && building.seats) {
         for (const seat of building.seats) {
           if (`${prof.building}-${seat.x}-${seat.y}` === v.assignedSeat) {
-            return { x: seat.x, y: seat.y };
+            return cartesianToIso(seat.x, seat.y);
           }
         }
       }
@@ -279,6 +291,11 @@ class VillageView extends ItemView {
       x: Math.min(96, Math.max(4, anchor.x + Math.cos(angle) * radius + (Math.random() * 4 - 2))),
       y: Math.min(96, Math.max(4, anchor.y + Math.sin(angle) * radius + (Math.random() * 4 - 2))),
     };
+  }
+
+  jitterIso(cartAnchor, key) {
+    const iso = cartesianToIso(cartAnchor.x, cartAnchor.y);
+    return this.jitter(iso, key);
   }
 
   doorStagger(key) {
@@ -389,8 +406,9 @@ class VillageView extends ItemView {
         const anchor = VILLAGE_BUILDINGS[prof.building];
         const curX = parseFloat(el.style.left);
         const curY = parseFloat(el.style.top);
-        if (!Number.isFinite(curX) || Math.abs(curX - anchor.x) > 2 || Math.abs(curY - (anchor.y + 3)) > 2) {
-          this.moveVillager(key, el, prof, anchor.x, anchor.y + 3);
+        const isoHome = cartesianToIso(anchor.x, anchor.y + 3);
+        if (!Number.isFinite(curX) || Math.abs(curX - isoHome.x) > 2 || Math.abs(curY - isoHome.y) > 2) {
+          this.moveVillager(key, el, prof, isoHome.x, isoHome.y);
         }
         this.wanderTargets.delete(key);
         continue;
@@ -426,9 +444,9 @@ class VillageView extends ItemView {
   pickWanderTarget(key, prof) {
     if (Math.random() < 0.25) {
       const anchor = VILLAGE_BUILDINGS[prof.building];
-      return this.jitter(anchor, key + Math.random());
+      return this.jitterIso(anchor, key + Math.random());
     }
-    return { x: 8 + Math.random() * 84, y: 8 + Math.random() * 84 };
+    return cartesianToIso(8 + Math.random() * 84, 8 + Math.random() * 84);
   }
 
   chatTick() {
@@ -642,7 +660,7 @@ class VillageView extends ItemView {
     }, { passive: true });
 
     const anchor = prof ? VILLAGE_BUILDINGS[prof.building] : { x: 50, y: 50 };
-    const pos = prof ? this.jitter(anchor, key) : { x: 20 + Math.random() * 60, y: 20 + Math.random() * 60 };
+    const pos = prof ? this.jitterIso(anchor, key) : { x: 20 + Math.random() * 60, y: 20 + Math.random() * 60 };
     el.style.left = `${pos.x}%`;
     el.style.top = `${pos.y}%`;
     if (isSub) {
@@ -690,22 +708,27 @@ class VillageView extends ItemView {
         villageMoodIcon(v.status, v.subStatus, sleeping ? 'sleeping' : chatting ? 'chatting' : collaborating ? 'collaborating' : null)
       );
 
+      const sl = skillLevel(v.experience || 0);
+      const lvlBadge = v.experience > 0 ? ` [${sl.title.slice(0, 4)}]` : '';
       const tagEl = el.querySelector('.ai-village-villager-tag');
       if (v.isSubagent) {
         tagEl.setText(`[sub] ${v.taskText || v.name}`);
       } else if (v.status === 'walking') {
-        tagEl.setText(`${v.name} is on the move`);
+        tagEl.setText(`${v.name}${lvlBadge} is on the move`);
       } else if (v.status === 'working' || v.status === 'reviewing' || v.status === 'waiting' || v.status === 'error') {
-        tagEl.setText(v.taskText ? `${v.name}: ${v.taskText}` : v.name);
+        tagEl.setText(v.taskText ? `${v.name}${lvlBadge}: ${v.taskText}` : `${v.name}${lvlBadge}`);
       } else if (v.status === 'meeting') {
-        tagEl.setText(v.taskText ? `${v.name}: ${v.taskText}` : `${v.name} at the Town Hall`);
+        tagEl.setText(v.taskText ? `${v.name}${lvlBadge}: ${v.taskText}` : `${v.name}${lvlBadge} at the Town Hall`);
       } else if (v.status === 'finished') {
-        tagEl.setText(`${v.name} ✓ ${v.taskText || 'done'}`);
+        tagEl.setText(`${v.name}${lvlBadge} ✓ ${v.taskText || 'done'}`);
       } else if (sleeping) {
-        tagEl.setText(`${v.name} is asleep`);
+        tagEl.setText(`${v.name}${lvlBadge} is asleep`);
       } else {
-        tagEl.setText(v.name);
+        tagEl.setText(`${v.name}${lvlBadge}`);
       }
+      // Add CSS class for skill level
+      el.toggleClass('is-master', sl.level >= 4);
+      el.toggleClass('is-expert', sl.level >= 3 && sl.level < 4);
 
       const activityEl = el.querySelector('.ai-village-villager-activity');
       if (v.subStatus === 'reading') {
@@ -728,7 +751,8 @@ class VillageView extends ItemView {
       if (v.status === 'walking') {
         el.style.transition = 'left 1.2s ease-in-out, top 1.2s ease-in-out, opacity 0.5s ease';
         if (v.walkTarget) {
-          this.moveVillager(key, el, prof, v.walkTarget.x, v.walkTarget.y);
+          const iso = cartesianToIso(v.walkTarget.x, v.walkTarget.y);
+          this.moveVillager(key, el, prof, iso.x, iso.y);
         }
       } else if ((v.status === 'working' || v.status === 'error') && !v.isSubagent) {
         el.style.transition = 'left 0.9s ease, top 0.9s ease, opacity 0.5s ease';
@@ -736,13 +760,14 @@ class VillageView extends ItemView {
         if (prof) pos = this.getSeatPosition(prof, v);
         if (!pos) {
           const anchor = prof ? VILLAGE_BUILDINGS[prof.building] : { x: 50, y: 50 };
-          pos = { x: anchor.x, y: anchor.y + 3 };
+          pos = cartesianToIso(anchor.x, anchor.y + 3);
         }
         this.moveVillager(key, el, prof, pos.x, pos.y);
       } else if (v.status === 'meeting') {
         if (prevStatus !== 'meeting') {
           const anchor = VILLAGE_BUILDINGS.townhall;
-          this.moveVillager(key, el, prof, anchor.x + this.doorStagger(key), anchor.y + 3);
+          const isoMeeting = cartesianToIso(anchor.x + this.doorStagger(key), anchor.y + 3);
+          this.moveVillager(key, el, prof, isoMeeting.x, isoMeeting.y);
           this.villagerHidden.delete(key);
           el.removeClass('is-hidden');
           clearTimeout(this.meetingTimers.get(key));
@@ -759,7 +784,8 @@ class VillageView extends ItemView {
         if (prof) {
           const anchor = VILLAGE_BUILDINGS[prof.building];
           const homeTimer = window.setTimeout(() => {
-            this.moveVillager(key, el, prof, anchor.x, anchor.y + 3);
+            const isoHome = cartesianToIso(anchor.x, anchor.y + 3);
+            this.moveVillager(key, el, prof, isoHome.x, isoHome.y);
           }, 650);
           this.meetingTimers.set(key, homeTimer);
         }
@@ -791,15 +817,17 @@ class VillageView extends ItemView {
         const toProf = VILLAGE_PROFESSIONS[village.villagers.get(m.toKey)?.professionKey || 'mayor'];
         const fromB = fromProf ? VILLAGE_BUILDINGS[fromProf.building] : { x: 50, y: 50 };
         const toB = toProf ? VILLAGE_BUILDINGS[toProf.building] : { x: 50, y: 50 };
+        const fromIso = cartesianToIso(fromB.x, fromB.y);
+        const toIso = cartesianToIso(toB.x, toB.y);
         const el = this.spriteLayerEl.createDiv({ cls: 'ai-village-messenger', text: '📜' });
-        el.style.left = `${fromB.x}%`;
-        el.style.top = `${fromB.y}%`;
+        el.style.left = `${fromIso.x}%`;
+        el.style.top = `${fromIso.y}%`;
         this.spriteLayerEl.appendChild(el);
         this.messengerEls.set(m.id, el);
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            el.style.left = `${toB.x}%`;
-            el.style.top = `${toB.y}%`;
+            el.style.left = `${toIso.x}%`;
+            el.style.top = `${toIso.y}%`;
           });
         });
       }
@@ -808,6 +836,24 @@ class VillageView extends ItemView {
       if (!liveIds.has(id)) {
         el.remove();
         this.messengerEls.delete(id);
+      }
+    }
+
+    for (const el of this.spriteLayerEl.children) {
+      const top = parseFloat(el.style.top);
+      if (Number.isFinite(top)) {
+        el.style.zIndex = Math.round(top * 20);
+      }
+    }
+
+    if (this.taskQueueEl) {
+      const qlen = village.taskQueueLength ? village.taskQueueLength() : 0;
+      if (qlen > 0) {
+        this.taskQueueEl.setText(`📋 ${qlen}`);
+        this.taskQueueEl.addClass('has-queued');
+      } else {
+        this.taskQueueEl.setText('');
+        this.taskQueueEl.removeClass('has-queued');
       }
     }
 

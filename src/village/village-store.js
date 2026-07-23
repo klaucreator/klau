@@ -1,11 +1,14 @@
 'use strict';
 
-const { VILLAGE_PROFESSIONS, VILLAGE_BUILDINGS } = require('./village-roster');
+const { VILLAGE_PROFESSIONS, VILLAGE_BUILDINGS, resolveVillageProfession, skillLevel } = require('./village-roster');
 
 const READING_TOOLS = new Set(['list_files', 'read_note', 'read_notes', 'get_note_metadata', 'search_notes', 'search_web']);
 const WRITING_TOOLS = new Set(['write_note', 'append_note', 'add_tags', 'move_note', 'rename_note', 'create_folder', 'delete_note']);
 
 const BUBBLE_AUTO_FADE = 2500;
+const AUTO_SPAWN_CHECK_MS = 5000;
+const MAX_IDLE_BEFORE_DORMANT = 5;
+const SPAWN_QUEUE_THRESHOLD = 2;
 
 class VillageStore {
   constructor(plugin) {
@@ -17,7 +20,10 @@ class VillageStore {
     this.listeners = new Set();
     this._idleTimers = new Map();
     this._bubbleTimers = new Map();
-    this._seatAssignments = new Map(); // buildingKey -> Set<villagerKey>
+    this._seatAssignments = new Map();
+    this.taskQueue = [];
+    this._lastSpawnCheck = 0;
+    this._spawnCount = 0;
   }
 
   subscribe(fn) {
@@ -74,14 +80,19 @@ class VillageStore {
         wanderPauseUntil: 0,
         assignedSeat: seatKey,
         toolHistory: [],
+        experience: 0,
+        completedTasks: [],
+        lessons: [],
         updatedAt: Date.now(),
       };
       this.villagers.set(key, v);
+      this.log('info', `${v.name} arrived (${VILLAGE_PROFESSIONS[professionKey]?.title || professionKey})`);
     } else if (name) {
       v.name = name;
     }
     this._emit();
-    this.log('info', `${v.name} arrived (${VILLAGE_PROFESSIONS[professionKey]?.title || professionKey})`);
+    const sl = skillLevel(v.experience);
+    this.log('log', `${v.name} ${v.experience > 0 ? `(Lvl ${sl.level} ${sl.title}) ` : ''}ready`);
     return v;
   }
 
@@ -214,6 +225,8 @@ class VillageStore {
       }
     }
 
+    this._checkSpawn();
+
     if (changed) this._emit();
   }
 
@@ -285,6 +298,82 @@ class VillageStore {
     return id;
   }
 
+  recordTaskComplete(key, summary) {
+    const v = this.villagers.get(key);
+    if (!v) return;
+    v.experience = (v.experience || 0) + 1;
+    const oldLevel = skillLevel(v.experience - 1).level;
+    const newLevel = skillLevel(v.experience).level;
+    const entry = { summary: String(summary || '').slice(0, 120), completedAt: Date.now() };
+    v.completedTasks.push(entry);
+    if (v.completedTasks.length > 20) v.completedTasks.shift();
+    v.lessons.push(entry.summary);
+    if (v.lessons.length > 10) v.lessons = v.lessons.slice(-10);
+    if (newLevel > oldLevel) {
+      const sl = skillLevel(v.experience);
+      this.setBubble(key, '⭐', `Reached ${sl.title}!`, 3000);
+      this.log('info', `${v.name} leveled up to ${sl.title} (Lvl ${sl.level})`);
+    }
+    this._emit();
+  }
+
+  getLessons(forKey) {
+    const v = this.villagers.get(forKey);
+    if (!v || !v.lessons || v.lessons.length === 0) return '';
+    return v.lessons.map((l, i) => `${i + 1}. ${l}`).join('\n');
+  }
+
+  addTask(goal) {
+    const task = { id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`, goal, createdAt: Date.now(), assignedTo: null };
+    this.taskQueue.push(task);
+    this.log('log', `Task queued: "${goal.slice(0, 60)}" (${this.taskQueue.length} pending)`);
+    this._checkSpawn();
+    this._emit();
+    return task;
+  }
+
+  claimNextTask(key) {
+    const task = this.taskQueue.find(t => !t.assignedTo);
+    if (!task) return null;
+    task.assignedTo = key;
+    this._emit();
+    return task;
+  }
+
+  taskQueueLength() { return this.taskQueue.filter(t => !t.assignedTo).length; }
+
+  _checkSpawn() {
+    const now = Date.now();
+    if (now - this._lastSpawnCheck < AUTO_SPAWN_CHECK_MS) return;
+    this._lastSpawnCheck = now;
+    const unassigned = this.taskQueue.filter(t => !t.assignedTo).length;
+    if (unassigned === 0) return;
+    const idleCount = Array.from(this.villagers.values()).filter(v => !v.isSubagent && (v.status === 'idle' || v.status === 'finished')).length;
+    if (unassigned > idleCount * SPAWN_QUEUE_THRESHOLD) {
+      this._autoSpawnVillager();
+    }
+  }
+
+  _autoSpawnVillager() {
+    const unassigned = this.taskQueue.filter(t => !t.assignedTo);
+    if (unassigned.length === 0) return;
+    const goal = unassigned[0].goal;
+    const profKey = resolveVillageProfession('Auto-spawned', goal);
+    const prof = VILLAGE_PROFESSIONS[profKey];
+    this._spawnCount++;
+    const name = `${prof ? prof.title : 'Villager'} ${String.fromCharCode(65 + (this._spawnCount - 1) % 26)}`;
+    const key = `spawn-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+    const building = prof ? VILLAGE_BUILDINGS[prof.building] : null;
+    this.ensure(key, profKey, name);
+    const v = this.villagers.get(key);
+    if (v) {
+      this.setBubble(key, '🌱', `Spawned for "${goal.slice(0, 30)}"`, 3000);
+      this.log('info', `${name} spawned (${prof?.title || profKey}) — ${this.taskQueue.filter(t => !t.assignedTo).length} tasks queued`);
+    }
+    this._emit();
+    return key;
+  }
+
   toJSON() {
     const villagers = {};
     for (const [key, v] of this.villagers) {
@@ -300,9 +389,12 @@ class VillageStore {
         isSubagent: v.isSubagent || false,
         parentKey: v.parentKey || null,
         toolHistory: v.toolHistory.slice(-10),
+        experience: v.experience || 0,
+        completedTasks: (v.completedTasks || []).slice(-5),
+        lessons: (v.lessons || []).slice(-5),
       };
     }
-    return { villagers, seatAssignments: Array.from(this._seatAssignments.entries()).map(([bk, s]) => [bk, Array.from(s)]) };
+    return { villagers, seatAssignments: Array.from(this._seatAssignments.entries()).map(([bk, s]) => [bk, Array.from(s)]), taskQueue: this.taskQueue.slice(-20) };
   }
 
   fromJSON(data) {
@@ -324,6 +416,9 @@ class VillageStore {
         toolHistory: v.toolHistory || [],
         isSubagent: v.isSubagent || false,
         parentKey: v.parentKey || null,
+        experience: v.experience || 0,
+        completedTasks: v.completedTasks || [],
+        lessons: v.lessons || [],
         updatedAt: Date.now(),
       });
     }

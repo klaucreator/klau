@@ -147,6 +147,12 @@ function resolveVillageProfession(name, roleText) {
 // Generic ambient lines for two idle villagers who bump into each other while wandering —
 // deliberately not profession-specific (the per-profession `idle` lines above already cover
 // "what am I doing right now"; this is just small talk between two of them).
+const SKILL_TITLES = ['Novice', 'Apprentice', 'Journeyman', 'Expert', 'Master', 'Grandmaster'];
+function skillLevel(experience) {
+  const level = Math.min(Math.floor((experience || 0) / 3), SKILL_TITLES.length - 1);
+  return { level, title: SKILL_TITLES[level], nextAt: (level + 1) * 3 };
+}
+
 const VILLAGE_SMALLTALK = [
   'Busy day, huh?',
   'Have you seen the notice board today?',
@@ -167,4 +173,5 @@ module.exports = {
   VILLAGE_SMALLTALK,
   villageSlug,
   resolveVillageProfession,
+  skillLevel,
 };
